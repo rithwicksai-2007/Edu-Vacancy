@@ -1,0 +1,1 @@
+"""EduVacancy FastAPI backend package."""
