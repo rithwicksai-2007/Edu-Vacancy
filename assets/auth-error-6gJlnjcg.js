@@ -1,0 +1,1 @@
+function e(e){return e instanceof Error?e.message:`Something went wrong. Please try again.`}export{e as t};
