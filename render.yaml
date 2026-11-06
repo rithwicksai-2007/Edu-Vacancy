@@ -1,0 +1,15 @@
+services:
+  - type: web
+    name: eduvacancy-api
+    runtime: python
+    plan: free
+    buildCommand: pip install -r Backend/requirements.txt
+    startCommand: uvicorn Backend.main:app --host 0.0.0.0 --port $PORT
+    healthCheckPath: /health
+    envVars:
+      - key: SUPABASE_URL
+        sync: false
+      - key: SUPABASE_SERVICE_ROLE_KEY
+        sync: false
+      - key: FRONTEND_ORIGINS
+        value: https://rithwicksai-2007.github.io,http://localhost:5173,http://127.0.0.1:5173

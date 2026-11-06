@@ -22,11 +22,27 @@ export type InAppNotification = {
   read_at: string | null;
 };
 
-const apiBaseUrl =
-  (import.meta.env.VITE_API_BASE_URL?.trim() || "http://127.0.0.1:8000").replace(
-    /\/+$/,
-    "",
-  );
+const apiBaseUrl = (
+  import.meta.env.VITE_API_BASE_URL?.trim() ||
+  (import.meta.env.DEV ? "http://127.0.0.1:8000" : "")
+).replace(/\/+$/, "");
+
+function getApiBaseUrl(): string {
+  if (!apiBaseUrl) {
+    throw new Error(
+      "The EduVacancy API is not configured. Set VITE_API_BASE_URL to the deployed backend URL and rebuild the frontend.",
+    );
+  }
+  if (!import.meta.env.DEV) {
+    const hostname = new URL(apiBaseUrl).hostname;
+    if (["localhost", "127.0.0.1", "::1"].includes(hostname)) {
+      throw new Error(
+        "VITE_API_BASE_URL points to this device. Set it to the deployed EduVacancy backend URL and rebuild the frontend.",
+      );
+    }
+  }
+  return apiBaseUrl;
+}
 
 export async function fetchCurrentAccount(
   accessToken: string,
@@ -53,7 +69,7 @@ export async function apiPublicRequest<T>(
   const headers = new Headers(init.headers);
   let response: Response;
   try {
-    response = await fetch(`${apiBaseUrl}${path}`, {
+    response = await fetch(`${getApiBaseUrl()}${path}`, {
       ...init,
       headers,
     });
@@ -108,7 +124,7 @@ export async function apiFetch(
   headers.set("Authorization", `Bearer ${accessToken}`);
   let response: Response;
   try {
-    response = await fetch(`${apiBaseUrl}${path}`, {
+    response = await fetch(`${getApiBaseUrl()}${path}`, {
       ...init,
       headers,
     });

@@ -33,6 +33,7 @@ type Database = {
           years_experience: number;
           preferred_location: string;
           resume_url: string | null;
+          profile_photo_url: string | null;
         };
         Insert: {
           id: string;
@@ -41,6 +42,7 @@ type Database = {
           years_experience: number;
           preferred_location: string;
           resume_url?: string | null;
+          profile_photo_url?: string | null;
         };
         Update: Partial<
           Database["public"]["Tables"]["job_seeker_details"]["Insert"]
@@ -94,6 +96,54 @@ type Database = {
         };
         Update: Partial<
           Database["public"]["Tables"]["institution_certificates"]["Insert"]
+        >;
+        Relationships: [];
+      };
+      job_seeker_documents: {
+        Row: {
+          id: string;
+          job_seeker_id: string;
+          document_type: "resume" | "profile_photo";
+          storage_path: string;
+          original_file_name: string;
+          content_type: string;
+          file_size: number;
+          created_at: string;
+        };
+        Insert: {
+          job_seeker_id: string;
+          document_type: "resume" | "profile_photo";
+          storage_path: string;
+          original_file_name: string;
+          content_type: string;
+          file_size: number;
+        };
+        Update: Partial<
+          Database["public"]["Tables"]["job_seeker_documents"]["Insert"]
+        >;
+        Relationships: [];
+      };
+      institution_documents: {
+        Row: {
+          id: string;
+          institution_id: string;
+          document_type: "institution_image";
+          storage_path: string;
+          original_file_name: string;
+          content_type: string;
+          file_size: number;
+          created_at: string;
+        };
+        Insert: {
+          institution_id: string;
+          document_type: "institution_image";
+          storage_path: string;
+          original_file_name: string;
+          content_type: string;
+          file_size: number;
+        };
+        Update: Partial<
+          Database["public"]["Tables"]["institution_documents"]["Insert"]
         >;
         Relationships: [];
       };

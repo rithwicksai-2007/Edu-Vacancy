@@ -9,12 +9,18 @@ import { Link } from "react-router-dom";
 import { getSupabaseClient, usernameAuthEmail } from "../lib/supabase-config";
 import { apiPublicRequest } from "../lib/api-config";
 import { getAuthErrorMessage } from "../lib/auth-error";
+import { useAppDialog } from "../components/AppDialogContext";
+import {
+  RegistrationLegalDialog,
+  type RegistrationLegalDocument,
+} from "./registration-legal";
 
 type InstitutionType =
   | "School"
   | "College"
   | "University"
-  | "Coaching Institute";
+  | "Coaching Institute"
+  | "Other";
 
 type FormData = {
   username: string;
@@ -24,9 +30,11 @@ type FormData = {
   secAnswer: string;
   instName: string;
   instType: InstitutionType | "";
+  otherInstType: string;
   regNumber: string;
   address: string;
   city: string;
+  village: string;
   state: string;
   pincode: string;
   website: string;
@@ -43,9 +51,11 @@ const initialForm: FormData = {
   secAnswer: "",
   instName: "",
   instType: "",
+  otherInstType: "",
   regNumber: "",
   address: "",
   city: "",
+  village: "",
   state: "",
   pincode: "",
   website: "",
@@ -60,6 +70,116 @@ const questions = [
   "City of your institution's head office?",
 ];
 
+const indianStates = [
+  "Andaman and Nicobar Islands",
+  "Andhra Pradesh",
+  "Arunachal Pradesh",
+  "Assam",
+  "Bihar",
+  "Chandigarh",
+  "Chhattisgarh",
+  "Dadra and Nagar Haveli and Daman and Diu",
+  "Delhi",
+  "Goa",
+  "Gujarat",
+  "Haryana",
+  "Himachal Pradesh",
+  "Jammu and Kashmir",
+  "Jharkhand",
+  "Karnataka",
+  "Kerala",
+  "Ladakh",
+  "Lakshadweep",
+  "Madhya Pradesh",
+  "Maharashtra",
+  "Manipur",
+  "Meghalaya",
+  "Mizoram",
+  "Nagaland",
+  "Odisha",
+  "Puducherry",
+  "Punjab",
+  "Rajasthan",
+  "Sikkim",
+  "Tamil Nadu",
+  "Telangana",
+  "Tripura",
+  "Uttar Pradesh",
+  "Uttarakhand",
+  "West Bengal",
+];
+
+const citiesByState: Record<string, string[]> = {
+  "Andaman and Nicobar Islands": ["Port Blair", "Diglipur", "Mayabunder"],
+  "Andhra Pradesh": ["Amaravati", "Visakhapatnam", "Vijayawada", "Guntur", "Tirupati", "Nellore", "Kurnool", "Rajahmundry", "Kakinada"],
+  "Arunachal Pradesh": ["Itanagar", "Naharlagun", "Tawang", "Pasighat", "Ziro"],
+  Assam: ["Guwahati", "Dibrugarh", "Silchar", "Jorhat", "Tezpur", "Nagaon", "Tinsukia"],
+  Bihar: ["Patna", "Gaya", "Bhagalpur", "Muzaffarpur", "Darbhanga", "Purnia"],
+  Chandigarh: ["Chandigarh"],
+  Chhattisgarh: ["Raipur", "Bhilai", "Bilaspur", "Korba", "Durg", "Jagdalpur"],
+  "Dadra and Nagar Haveli and Daman and Diu": ["Daman", "Diu", "Silvassa"],
+  Delhi: ["New Delhi", "Delhi"],
+  Goa: ["Panaji", "Margao", "Vasco da Gama", "Mapusa"],
+  Gujarat: ["Ahmedabad", "Surat", "Vadodara", "Rajkot", "Gandhinagar", "Bhavnagar", "Jamnagar"],
+  Haryana: ["Gurugram", "Faridabad", "Panipat", "Ambala", "Hisar", "Karnal", "Rohtak"],
+  "Himachal Pradesh": ["Shimla", "Dharamshala", "Mandi", "Solan", "Kullu"],
+  "Jammu and Kashmir": ["Srinagar", "Jammu", "Anantnag", "Baramulla"],
+  Jharkhand: ["Ranchi", "Jamshedpur", "Dhanbad", "Bokaro", "Hazaribagh"],
+  Karnataka: ["Bengaluru", "Mysuru", "Mangaluru", "Hubballi", "Belagavi", "Kalaburagi", "Shivamogga"],
+  Kerala: ["Thiruvananthapuram", "Kochi", "Kozhikode", "Thrissur", "Kollam", "Kannur"],
+  Ladakh: ["Leh", "Kargil"],
+  Lakshadweep: ["Kavaratti", "Agatti", "Minicoy"],
+  "Madhya Pradesh": ["Bhopal", "Indore", "Jabalpur", "Gwalior", "Ujjain", "Sagar", "Rewa"],
+  Maharashtra: ["Mumbai", "Pune", "Nagpur", "Nashik", "Thane", "Chhatrapati Sambhajinagar", "Kolhapur"],
+  Manipur: ["Imphal", "Thoubal", "Churachandpur"],
+  Meghalaya: ["Shillong", "Tura", "Jowai"],
+  Mizoram: ["Aizawl", "Lunglei", "Champhai"],
+  Nagaland: ["Kohima", "Dimapur", "Mokokchung"],
+  Odisha: ["Bhubaneswar", "Cuttack", "Rourkela", "Sambalpur", "Puri", "Berhampur"],
+  Puducherry: ["Puducherry", "Karaikal", "Mahe", "Yanam"],
+  Punjab: ["Ludhiana", "Amritsar", "Jalandhar", "Patiala", "Bathinda", "Mohali"],
+  Rajasthan: ["Jaipur", "Jodhpur", "Udaipur", "Kota", "Ajmer", "Bikaner", "Alwar"],
+  Sikkim: ["Gangtok", "Namchi", "Gyalshing"],
+  "Tamil Nadu": ["Chennai", "Coimbatore", "Madurai", "Tiruchirappalli", "Salem", "Tiruppur", "Erode"],
+  Telangana: ["Hyderabad", "Warangal", "Karimnagar", "Nizamabad", "Khammam"],
+  Tripura: ["Agartala", "Udaipur", "Dharmanagar"],
+  "Uttar Pradesh": ["Lucknow", "Kanpur", "Varanasi", "Agra", "Prayagraj", "Meerut", "Noida", "Ghaziabad", "Gorakhpur"],
+  Uttarakhand: ["Dehradun", "Haridwar", "Roorkee", "Haldwani", "Rishikesh"],
+  "West Bengal": ["Kolkata", "Howrah", "Siliguri", "Durgapur", "Asansol", "Kharagpur"],
+};
+
+type PostalOffice = {
+  Name?: string;
+  District?: string;
+  State?: string;
+};
+
+type PostalLookupResult = {
+  Status?: string;
+  PostOffice?: PostalOffice[] | null;
+};
+
+function canonicalStateName(stateName: string) {
+  const normalize = (value: string) => value.toLowerCase().replace(/[^a-z]/g, "");
+  const normalizedState = normalize(stateName);
+  const aliases: Record<string, string> = {
+    andamanandnicobarislands: "Andaman and Nicobar Islands",
+    andamanandnicobar: "Andaman and Nicobar Islands",
+    dadraandnagarhavelianddamandiu: "Dadra and Nagar Haveli and Daman and Diu",
+    dadraandnagarhaveli: "Dadra and Nagar Haveli and Daman and Diu",
+    damananddiu: "Dadra and Nagar Haveli and Daman and Diu",
+    nctofdelhi: "Delhi",
+    orissa: "Odisha",
+    pondicherry: "Puducherry",
+  };
+
+  return (
+    aliases[normalizedState] ??
+    indianStates.find((state) => normalize(state) === normalizedState) ??
+    ""
+  );
+}
+
 const inputClass =
   "w-full rounded-lg border border-[#E7EAF3] bg-white px-3 py-3 text-sm text-[#1C2333] outline-none transition placeholder:text-gray-400 focus:border-[#2C5CF6] focus:ring-2 focus:ring-blue-100";
 
@@ -73,28 +193,163 @@ const buttonOutline =
   "flex-1 rounded-lg border border-[#E7EAF3] bg-white px-4 py-3 text-sm font-bold text-[#1B2A5B] transition hover:bg-gray-50";
 
 export default function CollegeRegistration() {
+  const { showAlert } = useAppDialog();
   const [form, setForm] = useState<FormData>(initialForm);
   const [currentStep, setCurrentStep] = useState(1);
   const [showPassword, setShowPassword] = useState(false);
-  const [certificate, setCertificate] = useState<File | null>(null);
+  const [institutionImages, setInstitutionImages] = useState<File[]>([]);
+  const [termsAccepted, setTermsAccepted] = useState(false);
+  const [legalDocument, setLegalDocument] =
+    useState<RegistrationLegalDocument | null>(null);
   const [passwordError, setPasswordError] = useState("");
   const [message, setMessage] = useState("");
   const [messageType, setMessageType] = useState<"success" | "error">(
     "error"
   );
   const [loading, setLoading] = useState(false);
-  const certificateInputRef = useRef<HTMLInputElement>(null);
+  const [pinLookupMessage, setPinLookupMessage] = useState("");
+  const [pinLookupLoading, setPinLookupLoading] = useState(false);
+  const [pinOffices, setPinOffices] = useState<PostalOffice[]>([]);
+  const pinLookupRequest = useRef(0);
+  const institutionImagesInputRef = useRef<HTMLInputElement>(null);
 
   const updateField = (
     e: ChangeEvent<HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement>
   ) => {
-    const { name, value } = e.target;
-    setForm((previous) => ({ ...previous, [name]: value }));
+    const { name } = e.target;
+    const value =
+      name === "contactPhone" && e.target instanceof HTMLInputElement
+        ? e.target.value.replace(/\D/g, "").slice(0, 10)
+        : e.target.value;
+    setForm((previous) => ({
+      ...previous,
+      [name]: value,
+      ...(name === "state" ? { city: "", village: "" } : {}),
+      ...(name === "city" ? { village: "" } : {}),
+    }));
+
+    if (name === "state") {
+      pinLookupRequest.current++;
+      setPinOffices([]);
+      setPinLookupLoading(false);
+      setPinLookupMessage("");
+    }
 
     if (name === "confirmPassword" || name === "password") {
       setPasswordError("");
     }
   };
+
+  const lookupPinCode = async (pincode: string) => {
+    const requestId = ++pinLookupRequest.current;
+    setPinLookupLoading(true);
+    setPinLookupMessage("");
+
+    try {
+      const response = await fetch(
+        `https://api.postalpincode.in/pincode/${pincode}`,
+      );
+      if (!response.ok) {
+        throw new Error(`PIN lookup failed with status ${response.status}.`);
+      }
+
+      const results = (await response.json()) as PostalLookupResult[];
+      const offices = results
+        .filter((result) => result.Status === "Success")
+        .flatMap((result) => result.PostOffice ?? [])
+        .filter((office) => office.Name && office.District && office.State);
+      const officeState = offices[0]?.State;
+      const state = officeState ? canonicalStateName(officeState) : "";
+
+      if (!offices.length || !state) {
+        throw new Error("No matching post office was found.");
+      }
+
+      const districts = [
+        ...new Set(
+          offices
+            .filter(
+              (office) => canonicalStateName(office.State ?? "") === state,
+            )
+            .map((office) => office.District!),
+        ),
+      ];
+
+      if (requestId !== pinLookupRequest.current) return;
+
+      setPinOffices(offices);
+      setForm((previous) => ({
+        ...previous,
+        city: districts.length === 1 ? districts[0] : "",
+        state,
+        village:
+          districts.length === 1 &&
+          offices.filter((office) => office.District === districts[0]).length === 1
+            ? offices.find((office) => office.District === districts[0])?.Name ??
+              ""
+            : "",
+      }));
+      setPinLookupMessage(
+        districts.length === 1
+          ? "State and district filled from the PIN code. Select the village / post office."
+          : "State filled from the PIN code. Select the district and village / post office.",
+      );
+    } catch {
+      if (requestId === pinLookupRequest.current) {
+        setPinLookupMessage(
+          "PIN code could not be looked up. Select the state and city manually.",
+        );
+      }
+    } finally {
+      if (requestId === pinLookupRequest.current) {
+        setPinLookupLoading(false);
+      }
+    }
+  };
+
+  const updatePincode = (value: string) => {
+    const pincode = value.replace(/\D/g, "").slice(0, 6);
+    setForm((previous) => ({
+      ...previous,
+      pincode,
+      city: "",
+      village: "",
+      state: "",
+    }));
+    setPinOffices([]);
+    setPinLookupMessage("");
+
+    if (pincode.length === 6) {
+      void lookupPinCode(pincode);
+    } else {
+      pinLookupRequest.current++;
+      setPinLookupLoading(false);
+    }
+  };
+
+  const pinDistricts = [
+    ...new Set(
+      pinOffices
+        .filter((office) => canonicalStateName(office.State ?? "") === form.state)
+        .map((office) => office.District!)
+        .filter(Boolean),
+    ),
+  ];
+  const availableDistricts = pinDistricts.length
+    ? pinDistricts
+    : citiesByState[form.state] ?? [];
+  const villagesForDistrict = [
+    ...new Set(
+      pinOffices
+        .filter(
+          (office) =>
+            canonicalStateName(office.State ?? "") === form.state &&
+            office.District === form.city,
+        )
+        .map((office) => office.Name!)
+        .filter(Boolean),
+    ),
+  ];
 
   const passwordScore = [
     form.password.length >= 8,
@@ -151,6 +406,7 @@ export default function CollegeRegistration() {
       "regNumber",
       "address",
       "city",
+      "village",
       "state",
       "pincode",
     ];
@@ -167,6 +423,11 @@ export default function CollegeRegistration() {
       return false;
     }
 
+    if (form.instType === "Other" && !form.otherInstType.trim()) {
+      setError("Please enter the institution type.");
+      return false;
+    }
+
     if (
       form.website &&
       !/^https?:\/\/.+\..+/.test(form.website.trim())
@@ -180,6 +441,11 @@ export default function CollegeRegistration() {
   };
 
   const validateStep3 = () => {
+    if (institutionImages.length === 0) {
+      setError("Upload at least one clear school or college photo to continue.");
+      return false;
+    }
+
     if (
       !form.contactName.trim() ||
       !form.contactDesignation.trim() ||
@@ -189,22 +455,14 @@ export default function CollegeRegistration() {
       return false;
     }
 
-    if (certificate) {
-      const validExtension = /\.(pdf|jpe?g|png)$/i.test(certificate.name);
-      const allowedTypes = ["application/pdf", "image/jpeg", "image/png"];
+    if (!/^\d{10}$/.test(form.contactPhone)) {
+      setError("Contact phone must contain exactly 10 digits.");
+      return false;
+    }
 
-      if (
-        !validExtension ||
-        (certificate.type !== "" && !allowedTypes.includes(certificate.type))
-      ) {
-        setError("Upload a PDF, JPG, or PNG certificate.");
-        return false;
-      }
-
-      if (certificate.size > 5 * 1024 * 1024) {
-        setError("Certificate size must not exceed 5 MB.");
-        return false;
-      }
+    if (institutionImages.length > 5) {
+      setError("Upload no more than 5 institution photos.");
+      return false;
     }
 
     setMessage("");
@@ -228,35 +486,33 @@ export default function CollegeRegistration() {
     window.scrollTo({ top: 0, behavior: "smooth" });
   };
 
-  const handleCertificate = (e: ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0] ?? null;
+  const handleInstitutionImages = (e: ChangeEvent<HTMLInputElement>) => {
+    const files = Array.from(e.target.files ?? []);
+    const validTypes = ["image/jpeg", "image/png"];
+    const validExtension = /\.(jpe?g|png)$/i;
 
-    if (!file) {
-      setCertificate(null);
-      return;
-    }
-
-    const validExtension = /\.(pdf|jpe?g|png)$/i.test(file.name);
-    const allowedTypes = ["application/pdf", "image/jpeg", "image/png"];
-
-    if (
-      !validExtension ||
-      (file.type !== "" && !allowedTypes.includes(file.type))
-    ) {
-      setError("Upload a PDF, JPG, or PNG certificate.");
+    if (files.length > 5) {
+      setError("Upload no more than 5 institution photos.");
       e.target.value = "";
-      setCertificate(null);
       return;
     }
 
-    if (file.size > 5 * 1024 * 1024) {
-      setError("Certificate size must not exceed 5 MB.");
+    const invalidFile = files.find(
+      (file) =>
+        !validExtension.test(file.name) ||
+        !validTypes.includes(file.type) ||
+        file.size > 5 * 1024 * 1024,
+    );
+    if (invalidFile) {
+      setError(
+        "Choose JPG or PNG photos, each smaller than 5 MB.",
+      );
       e.target.value = "";
-      setCertificate(null);
       return;
     }
 
-    setCertificate(file);
+    setInstitutionImages(files);
+    e.target.value = "";
     setMessage("");
   };
 
@@ -265,11 +521,7 @@ export default function CollegeRegistration() {
 
     if (!validateStep3()) return;
 
-    const terms = document.getElementById(
-      "institution-terms"
-    ) as HTMLInputElement | null;
-
-    if (!terms?.checked) {
+    if (!termsAccepted) {
       setError("Please accept the Terms of Service and Privacy Policy.");
       return;
     }
@@ -295,12 +547,16 @@ export default function CollegeRegistration() {
             security_question: form.secQuestion,
             security_answer_hash: answerHash,
             institution_name: form.instName.trim(),
-            institution_type: form.instType,
+            institution_type:
+              form.instType === "Other"
+                ? form.otherInstType.trim()
+                : form.instType,
             address: form.address.trim(),
             contact_person: form.contactName.trim(),
             contact_designation: form.contactDesignation.trim(),
             registration_number: form.regNumber.trim(),
             city: form.city.trim(),
+            village: form.village.trim(),
             state: form.state.trim(),
             pincode: form.pincode.trim(),
             website: form.website.trim() || null,
@@ -320,64 +576,94 @@ export default function CollegeRegistration() {
       }
       const userId = account.id;
 
-      let certificateUploadWarning = false;
-      if (certificate) {
-        const safeFileName = certificate.name.replace(
-          /[^a-zA-Z0-9._-]/g,
-          "_"
-        );
-
+      let photoUploadWarning = false;
+      const uploadedPaths: string[] = [];
+      const documentRows: {
+        institution_id: string;
+        document_type: "institution_image";
+        storage_path: string;
+        original_file_name: string;
+        content_type: string;
+        file_size: number;
+      }[] = [];
+      const supabaseClient = getSupabaseClient();
+      for (const image of institutionImages) {
+        const safeFileName = image.name.replace(/[^a-zA-Z0-9._-]/g, "_");
         const path = `${userId}/${crypto.randomUUID()}-${safeFileName}`;
-
-        const { error: uploadError } = await getSupabaseClient().storage
-          .from("certificates")
-          .upload(path, certificate, {
-            contentType: certificate.type,
-            upsert: false,
-          });
+        const { error: uploadError } = await supabaseClient.storage
+          .from("institution-documents")
+          .upload(path, image, { contentType: image.type, upsert: false });
 
         if (uploadError) {
-          certificateUploadWarning = true;
-        } else {
-          const { error: certificateError } = await getSupabaseClient()
-            .from("institution_certificates")
-            .insert({
-              institution_id: userId,
-              file_url: path,
-              cert_type: "registration_certificate",
-            });
+          photoUploadWarning = true;
+          break;
+        }
 
-          if (certificateError) {
-            await getSupabaseClient().storage.from("certificates").remove([path]);
-            certificateUploadWarning = true;
+        uploadedPaths.push(path);
+        documentRows.push({
+          institution_id: userId,
+          document_type: "institution_image",
+          storage_path: path,
+          original_file_name: image.name,
+          content_type: image.type,
+          file_size: image.size,
+        });
+      }
+
+      if (photoUploadWarning && uploadedPaths.length) {
+        const { error: cleanupError } = await supabaseClient.storage
+          .from("institution-documents")
+          .remove(uploadedPaths);
+        if (cleanupError) {
+          console.error("Could not clean up partially uploaded institution photos.", cleanupError);
+        }
+      } else if (uploadedPaths.length) {
+        const { error: photoRecordError } = await supabaseClient
+          .from("institution_documents")
+          .insert(documentRows);
+
+        if (photoRecordError) {
+          const { error: cleanupError } = await supabaseClient.storage
+            .from("institution-documents")
+            .remove(uploadedPaths);
+          if (cleanupError) {
+            console.error("Could not clean up institution photos after metadata failed.", cleanupError);
           }
+          photoUploadWarning = true;
         }
       }
 
       setMessageType("success");
       setMessage(
-        certificateUploadWarning
-          ? "Registration submitted successfully. Log in with your username to upload your certificate. Your institution will be reviewed before verification."
+        photoUploadWarning
+          ? "Registration submitted successfully, but one or more institution photos could not be uploaded. Your institution will be reviewed before verification."
           : "Registration submitted successfully. You can now log in with your username. Your institution will be reviewed before verification."
+      );
+      await showAlert(
+        photoUploadWarning
+          ? "Registration successful, but one or more institution photos could not be uploaded. Your institution will be reviewed before verification."
+          : "Registration successful. You can now log in with your username. Your institution will be reviewed before verification.",
       );
 
       setForm(initialForm);
-      setCertificate(null);
+      setInstitutionImages([]);
+      setTermsAccepted(false);
       setCurrentStep(1);
       setShowPassword(false);
-      if (certificateInputRef.current) {
-        certificateInputRef.current.value = "";
+      if (institutionImagesInputRef.current) {
+        institutionImagesInputRef.current.value = "";
       }
     } catch (error: unknown) {
       const errorMessage = getAuthErrorMessage(error);
 
       if (createdUserId) {
         setMessageType("error");
-        setMessage(
-          `Your account was created, but registration could not finish: ${errorMessage} You can sign in with your username and password; do not register the same username again.`
-        );
+        const message = `Your account was created, but registration could not finish: ${errorMessage} You can sign in with your username and password; do not register the same username again.`;
+        setMessage(message);
+        await showAlert(`Registration incomplete.\n${message}`);
       } else {
         setError(errorMessage);
+        await showAlert(`Registration unsuccessful.\n${errorMessage}`);
       }
     } finally {
       setLoading(false);
@@ -689,8 +975,27 @@ export default function CollegeRegistration() {
                       <option value="College">College</option>
                       <option value="University">University</option>
                       <option value="Coaching Institute">Coaching Institute</option>
+                      <option value="Other">Other</option>
                     </select>
                   </div>
+
+                  {form.instType === "Other" && (
+                    <div className="mt-3 sm:col-span-2 sm:mt-0">
+                      <label className={labelClass} htmlFor="otherInstType">
+                        Enter institution type
+                      </label>
+                      <input
+                        className={inputClass}
+                        id="otherInstType"
+                        name="otherInstType"
+                        value={form.otherInstType}
+                        onChange={updateField}
+                        maxLength={80}
+                        required
+                        placeholder="e.g. Research institute"
+                      />
+                    </div>
+                  )}
 
                   <div>
                     <label className={labelClass} htmlFor="regNumber">
@@ -726,35 +1031,6 @@ export default function CollegeRegistration() {
 
                 <div className="mb-4 grid grid-cols-1 gap-3 sm:grid-cols-2">
                   <div>
-                    <label className={labelClass} htmlFor="city">
-                      City
-                    </label>
-                    <input
-                      className={inputClass}
-                      id="city"
-                      name="city"
-                      value={form.city}
-                      onChange={updateField}
-                      required
-                    />
-                  </div>
-                  <div>
-                    <label className={labelClass} htmlFor="state">
-                      State
-                    </label>
-                    <input
-                      className={inputClass}
-                      id="state"
-                      name="state"
-                      value={form.state}
-                      onChange={updateField}
-                      required
-                    />
-                  </div>
-                </div>
-
-                <div className="mb-4 grid grid-cols-1 gap-3 sm:grid-cols-2">
-                  <div>
                     <label className={labelClass} htmlFor="pincode">
                       PIN code
                     </label>
@@ -763,28 +1039,127 @@ export default function CollegeRegistration() {
                       id="pincode"
                       name="pincode"
                       value={form.pincode}
-                      onChange={updateField}
+                      onChange={(event) => updatePincode(event.target.value)}
                       inputMode="numeric"
                       pattern="[0-9]{6}"
                       maxLength={6}
                       required
                       placeholder="6-digit code"
                     />
+                    {(pinLookupLoading || pinLookupMessage) && (
+                      <p
+                        role="status"
+                        className={`mt-1 text-xs ${
+                          pinLookupLoading ? "text-[#6B7280]" : "text-[#2C5CF6]"
+                        }`}
+                      >
+                        {pinLookupLoading
+                          ? "Looking up PIN code..."
+                          : pinLookupMessage}
+                      </p>
+                    )}
                   </div>
                   <div>
-                    <label className={labelClass} htmlFor="website">
-                      Website (optional)
+                    <label className={labelClass} htmlFor="state">
+                      State
                     </label>
-                    <input
+                    <select
                       className={inputClass}
-                      type="url"
-                      id="website"
-                      name="website"
-                      value={form.website}
+                      id="state"
+                      name="state"
+                      value={form.state}
                       onChange={updateField}
-                      placeholder="https://"
-                    />
+                      required
+                    >
+                      <option value="">Select state / union territory...</option>
+                      {indianStates.map((state) => (
+                        <option key={state} value={state}>
+                          {state}
+                        </option>
+                      ))}
+                    </select>
                   </div>
+                </div>
+
+                <div className="mb-4 grid grid-cols-1 gap-3 sm:grid-cols-2">
+                  <div>
+                    <label className={labelClass} htmlFor="city">
+                      District / city
+                    </label>
+                    <select
+                      className={inputClass}
+                      id="city"
+                      name="city"
+                      value={form.city}
+                      onChange={updateField}
+                      disabled={!form.state}
+                      required
+                    >
+                      <option value="">
+                        {form.state
+                          ? "Select district / city..."
+                          : "Select a state first..."}
+                      </option>
+                      {availableDistricts.map((city) => (
+                        <option key={city} value={city}>
+                          {city}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                  <div>
+                    <label className={labelClass} htmlFor="village">
+                      Village / locality / post office
+                    </label>
+                    {villagesForDistrict.length ? (
+                      <select
+                        className={inputClass}
+                        id="village"
+                        name="village"
+                        value={form.village}
+                        onChange={updateField}
+                        disabled={!form.city}
+                        required
+                      >
+                        <option value="">
+                          {form.city
+                            ? "Select village / post office..."
+                            : "Select a district first..."}
+                        </option>
+                        {villagesForDistrict.map((village) => (
+                          <option key={village} value={village}>
+                            {village}
+                          </option>
+                        ))}
+                      </select>
+                    ) : (
+                      <input
+                        className={inputClass}
+                        id="village"
+                        name="village"
+                        value={form.village}
+                        onChange={updateField}
+                        required
+                        maxLength={120}
+                        placeholder="Enter village or locality"
+                      />
+                    )}
+                  </div>
+                </div>
+
+                <div className="mb-4">
+                  <label className={labelClass} htmlFor="website">
+                    Website (optional)
+                  </label>
+                  <input
+                    className={inputClass}
+                    type="url"
+                    id="website"
+                    name="website"
+                    value={form.website}
+                    onChange={updateField}
+                    placeholder="https://"
+                  />
                 </div>
 
                 <div className="mt-6 flex flex-col gap-3 sm:flex-row">
@@ -855,57 +1230,71 @@ export default function CollegeRegistration() {
                     value={form.contactPhone}
                     onChange={updateField}
                     required
+                    inputMode="numeric"
+                    pattern="[0-9]{10}"
+                    maxLength={10}
                     autoComplete="tel"
-                    placeholder="+91 98765 43210"
+                    placeholder="10-digit phone number"
                   />
                 </div>
 
                 <div className="mb-5">
-                  <label className={labelClass} htmlFor="certFile">
-                    Registration certificate (optional)
+                  <label className={labelClass} htmlFor="institutionImages">
+                    School / college photos
                   </label>
                   <label
-                    htmlFor="certFile"
+                    htmlFor="institutionImages"
                     className={`flex cursor-pointer flex-col items-center justify-center rounded-xl border-2 border-dashed p-6 text-center transition hover:border-[#2C5CF6] ${
-                      certificate
+                      institutionImages.length
                         ? "border-green-500 bg-green-50 text-green-700"
                         : "border-[#E7EAF3] text-gray-500"
                     }`}
                   >
                     <span className="mb-2 text-2xl">
-                      {certificate ? "✅" : "📎"}
+                      {institutionImages.length ? "✅" : "🏫"}
                     </span>
                     <span className="max-w-full break-all text-sm font-semibold">
-                      {certificate
-                        ? certificate.name
-                        : "Click to upload certificate"}
+                      {institutionImages.length
+                        ? `${institutionImages.length} photo${institutionImages.length === 1 ? "" : "s"} selected`
+                        : "Upload at least one clear photo of your school or college"}
                     </span>
                     <span className="mt-1 text-xs">
-                      PDF, JPG, or PNG · Maximum 5 MB
+                      Required · JPG or PNG · Up to 5 photos, 5 MB each
                     </span>
                   </label>
 
                   <input
-                    ref={certificateInputRef}
+                    ref={institutionImagesInputRef}
                     className="hidden"
                     type="file"
-                    id="certFile"
-                    accept=".pdf,.jpg,.jpeg,.png"
-                    onChange={handleCertificate}
+                    id="institutionImages"
+                    accept="image/jpeg,image/png"
+                    multiple
+                    onChange={handleInstitutionImages}
                   />
 
-                  {certificate && (
+                  {institutionImages.length > 0 && (
+                    <ul className="mt-2 space-y-1 text-xs text-gray-600">
+                      {institutionImages.map((image) => (
+                        <li key={`${image.name}-${image.lastModified}`}>
+                          {image.name}
+                        </li>
+                      ))}
+                    </ul>
+                  )}
+
+                  {institutionImages.length > 0 && (
                     <button
                       type="button"
                       onClick={() => {
-                        setCertificate(null);
-                        if (certificateInputRef.current) {
-                          certificateInputRef.current.value = "";
+                        setInstitutionImages([]);
+                        if (institutionImagesInputRef.current) {
+                          institutionImagesInputRef.current.value = "";
                         }
                       }}
                       className="mt-2 text-xs font-semibold text-red-600 hover:underline"
                     >
-                      Remove selected file
+                      Clear selected photos
                     </button>
                   )}
                 </div>
@@ -916,19 +1305,29 @@ export default function CollegeRegistration() {
                     type="checkbox"
                     id="institution-terms"
                     required
+                    checked={termsAccepted}
+                    onChange={(event) => setTermsAccepted(event.target.checked)}
+                    aria-label="I confirm the institution details are accurate and agree to the Terms of Service and Privacy Policy"
                   />
-                  <label htmlFor="institution-terms">
-                    I confirm the details provided are accurate and agree to
-                    EduVacancy's{" "}
-                    <span className="font-semibold text-[#2C5CF6]">
+                  <div>
+                    I confirm the details provided are accurate and agree to{" "}
+                    <button
+                      type="button"
+                      onClick={() => setLegalDocument("terms")}
+                      className="font-semibold text-[#2C5CF6] hover:underline"
+                    >
                       Terms of Service
-                    </span>{" "}
+                    </button>{" "}
                     and{" "}
-                    <span className="font-semibold text-[#2C5CF6]">
+                    <button
+                      type="button"
+                      onClick={() => setLegalDocument("privacy")}
+                      className="font-semibold text-[#2C5CF6] hover:underline"
+                    >
                       Privacy Policy
-                    </span>
+                    </button>
                     .
-                  </label>
+                  </div>
                 </div>
 
                 <div className="mt-6 flex flex-col gap-3 sm:flex-row">
@@ -976,6 +1375,13 @@ export default function CollegeRegistration() {
           </p>
         </div>
       </section>
+      {legalDocument && (
+        <RegistrationLegalDialog
+          document={legalDocument}
+          accountType="institution"
+          onClose={() => setLegalDocument(null)}
+        />
+      )}
     </main>
   );
 }

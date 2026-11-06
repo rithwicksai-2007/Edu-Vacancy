@@ -130,7 +130,8 @@ create table if not exists public.job_seeker_details (
 );
 
 alter table public.job_seeker_details
-    add column if not exists professional_summary text not null default '';
+    add column if not exists professional_summary text not null default '',
+    add column if not exists profile_photo_url text;
 
 create table if not exists public.institution_details (
     id uuid primary key references public.profiles(id) on delete cascade,
@@ -141,6 +142,7 @@ create table if not exists public.institution_details (
     contact_designation text not null,
     registration_number text not null,
     city text not null,
+    village text not null default '',
     state text not null,
     pincode text not null,
     website text,
@@ -151,11 +153,36 @@ create table if not exists public.institution_details (
 alter table public.institution_details
     add column if not exists description text not null default '';
 
+alter table public.institution_details
+    add column if not exists village text not null default '';
+
 create table if not exists public.institution_certificates (
     id uuid primary key default gen_random_uuid(),
     institution_id uuid not null references public.profiles(id) on delete cascade,
     file_url text not null,
     cert_type text not null default 'registration_certificate',
+    created_at timestamptz not null default now()
+);
+
+create table if not exists public.job_seeker_documents (
+    id uuid primary key default gen_random_uuid(),
+    job_seeker_id uuid not null references public.profiles(id) on delete cascade,
+    document_type text not null check (document_type in ('resume', 'profile_photo')),
+    storage_path text not null,
+    original_file_name text not null,
+    content_type text not null,
+    file_size bigint not null check (file_size > 0),
+    created_at timestamptz not null default now()
+);
+
+create table if not exists public.institution_documents (
+    id uuid primary key default gen_random_uuid(),
+    institution_id uuid not null references public.profiles(id) on delete cascade,
+    document_type text not null check (document_type in ('institution_image')),
+    storage_path text not null,
+    original_file_name text not null,
+    content_type text not null,
+    file_size bigint not null check (file_size > 0),
     created_at timestamptz not null default now()
 );
 
@@ -306,6 +333,16 @@ create table if not exists public.notifications (
 create index if not exists notifications_recipient_created_idx
     on public.notifications (recipient_id, created_at desc);
 
+-- Keep this UUID synchronized with ADMIN_USER_ID in Backend/.env.
+create or replace function public.is_platform_admin()
+returns boolean
+language sql
+stable
+as $$
+    select auth.uid() = '89ee1af5-7df9-4d49-9d51-316998b8314b'::uuid
+       and (auth.jwt() -> 'app_metadata' ->> 'platform_role') = 'admin';
+$$;
+
 create or replace function public.create_platform_profile()
 returns trigger
 language plpgsql
@@ -376,8 +413,8 @@ begin
     else
         insert into public.institution_details (
             id, institution_name, institution_type, address, contact_person,
-            contact_designation, registration_number, city, state, pincode,
-            website, description
+            contact_designation, registration_number, city, village, state,
+            pincode, website, description
         ) values (
             new.id,
             coalesce(nullif(trim(metadata ->> 'institution_name'), ''), split_part(new.email, '@', 1)),
@@ -387,6 +424,7 @@ begin
             coalesce(metadata ->> 'contact_designation', ''),
             coalesce(metadata ->> 'registration_number', ''),
             coalesce(metadata ->> 'city', ''),
+            coalesce(metadata ->> 'village', ''),
             coalesce(metadata ->> 'state', ''),
             coalesce(metadata ->> 'pincode', ''),
             nullif(metadata ->> 'website', ''),
@@ -442,7 +480,7 @@ returns trigger
 language plpgsql
 as $$
 begin
-    if coalesce(auth.jwt() -> 'app_metadata' ->> 'platform_role', '') <> 'admin'
+    if not public.is_platform_admin()
        and coalesce(auth.role(), '') <> 'service_role' then
         if tg_table_name = 'vacancies' then
             new.status = old.status;
@@ -467,6 +505,8 @@ alter table public.account_preferences enable row level security;
 alter table public.job_seeker_details enable row level security;
 alter table public.institution_details enable row level security;
 alter table public.institution_certificates enable row level security;
+alter table public.job_seeker_documents enable row level security;
+alter table public.institution_documents enable row level security;
 alter table public.vacancies enable row level security;
 alter table public.saved_vacancies enable row level security;
 alter table public.saved_teachers enable row level security;
@@ -477,11 +517,15 @@ alter table public.audit_log enable row level security;
 alter table public.notifications enable row level security;
 grant select, update on public.notifications to authenticated;
 grant all on public.notifications to service_role;
+grant select, insert, delete on public.job_seeker_documents to authenticated;
+grant select, insert, delete on public.institution_documents to authenticated;
+grant all on public.job_seeker_documents to service_role;
+grant all on public.institution_documents to service_role;
 
 drop policy if exists "profiles_select_self_or_admin" on public.profiles;
 create policy "profiles_select_self_or_admin" on public.profiles
 for select to authenticated
-using (id = auth.uid() or (auth.jwt() -> 'app_metadata' ->> 'platform_role') = 'admin');
+using (id = auth.uid() or public.is_platform_admin());
 
 drop policy if exists "profiles_insert_self_non_admin" on public.profiles;
 create policy "profiles_insert_self_non_admin" on public.profiles
@@ -516,13 +560,42 @@ for all to authenticated
 using (institution_id = auth.uid())
 with check (institution_id = auth.uid());
 
+drop policy if exists "job_seeker_documents_self" on public.job_seeker_documents;
+create policy "job_seeker_documents_self" on public.job_seeker_documents
+for all to authenticated
+using (job_seeker_id = auth.uid())
+with check (
+    job_seeker_id = auth.uid()
+    and exists (
+        select 1 from public.profiles p
+        where p.id = auth.uid() and p.role = 'job_seeker'
+    )
+);
+
+drop policy if exists "institution_documents_self" on public.institution_documents;
+create policy "institution_documents_self" on public.institution_documents
+for all to authenticated
+using (institution_id = auth.uid())
+with check (
+    institution_id = auth.uid()
+    and exists (
+        select 1 from public.profiles p
+        where p.id = auth.uid() and p.role = 'institution'
+    )
+);
+
+create index if not exists job_seeker_documents_owner_idx
+    on public.job_seeker_documents (job_seeker_id, document_type);
+create index if not exists institution_documents_owner_idx
+    on public.institution_documents (institution_id, document_type);
+
 drop policy if exists "vacancies_read_verified_or_owner" on public.vacancies;
 create policy "vacancies_read_verified_or_owner" on public.vacancies
 for select to anon, authenticated
 using (
     status = 'Verified'
     or institution_id = auth.uid()
-    or (auth.jwt() -> 'app_metadata' ->> 'platform_role') = 'admin'
+    or public.is_platform_admin()
 );
 
 drop policy if exists "vacancies_insert_verified_institution" on public.vacancies;
@@ -598,7 +671,7 @@ using (
         select 1 from public.vacancies v
         where v.id = vacancy_id and v.institution_id = auth.uid()
     )
-    or (auth.jwt() -> 'app_metadata' ->> 'platform_role') = 'admin'
+    or public.is_platform_admin()
 );
 
 drop policy if exists "applications_insert_verified_job_seeker" on public.applications;
@@ -639,7 +712,7 @@ for select to authenticated
 using (
     teacher_id = auth.uid()
     or institution_id = auth.uid()
-    or (auth.jwt() -> 'app_metadata' ->> 'platform_role') = 'admin'
+    or public.is_platform_admin()
 );
 
 drop policy if exists "connections_insert_verified_participant" on public.connections;
@@ -662,7 +735,7 @@ create policy "complaints_read_reporter_or_admin" on public.complaints
 for select to authenticated
 using (
     reporter_id = auth.uid()
-    or (auth.jwt() -> 'app_metadata' ->> 'platform_role') = 'admin'
+    or public.is_platform_admin()
 );
 
 drop policy if exists "complaints_insert_self" on public.complaints;
@@ -673,7 +746,7 @@ with check (reporter_id = auth.uid() and status = 'Open');
 drop policy if exists "audit_log_admin_read" on public.audit_log;
 create policy "audit_log_admin_read" on public.audit_log
 for select to authenticated
-using ((auth.jwt() -> 'app_metadata' ->> 'platform_role') = 'admin');
+using (public.is_platform_admin());
 
 drop policy if exists "notifications_read_self" on public.notifications;
 create policy "notifications_read_self" on public.notifications
@@ -689,7 +762,9 @@ with check (recipient_id = auth.uid());
 insert into storage.buckets (id, name, public, file_size_limit, allowed_mime_types)
 values
     ('resumes', 'resumes', false, 5242880, array['application/pdf', 'application/msword', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document']),
-    ('certificates', 'certificates', false, 5242880, array['application/pdf', 'image/jpeg', 'image/png'])
+    ('certificates', 'certificates', false, 5242880, array['application/pdf', 'image/jpeg', 'image/png']),
+    ('job-seeker-documents', 'job-seeker-documents', false, 5242880, array['application/pdf', 'application/msword', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document', 'image/jpeg', 'image/png', 'image/webp']),
+    ('institution-documents', 'institution-documents', false, 5242880, array['image/jpeg', 'image/png'])
 on conflict (id) do update
 set public = excluded.public,
     file_size_limit = excluded.file_size_limit,
@@ -699,10 +774,10 @@ drop policy if exists "private_documents_owner_access" on storage.objects;
 create policy "private_documents_owner_access" on storage.objects
 for all to authenticated
 using (
-    bucket_id in ('resumes', 'certificates')
+    bucket_id in ('resumes', 'certificates', 'job-seeker-documents', 'institution-documents')
     and (storage.foldername(name))[1] = auth.uid()::text
 )
 with check (
-    bucket_id in ('resumes', 'certificates')
+    bucket_id in ('resumes', 'certificates', 'job-seeker-documents', 'institution-documents')
     and (storage.foldername(name))[1] = auth.uid()::text
 );

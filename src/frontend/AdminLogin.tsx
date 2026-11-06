@@ -29,9 +29,7 @@ export default function AdminLogin() {
 
       if (account.platform_role !== "admin") {
         await supabase.auth.signOut();
-        throw new Error(
-          "This account is not an administrator. Set platform_role to admin in Supabase Auth app metadata, then sign in again.",
-        );
+        throw new Error("This account is not authorized to access administrator tools.");
       }
 
       navigate("/adminDashboard");

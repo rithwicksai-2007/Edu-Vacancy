@@ -19,9 +19,9 @@ audience, and only grants administrator access when the server-managed
 2. Open the Supabase SQL Editor and run
    [`Backend/supabase/schema.sql`](./Backend/supabase/schema.sql). This
    creates the profile, preference, vacancy, saved-item, application,
-   connection, complaint, notification, and audit tables, row-level security
-   policies, private document buckets, and an Auth trigger that creates
-   profile/detail rows from registration metadata. If the database was set up
+   connection, complaint, notification, audit, and role-specific document
+   tables, row-level security policies, private document buckets, and an Auth
+   trigger that creates profile/detail rows from registration metadata. If the database was set up
    earlier, rerun this idempotent script before using username registration or
    notifications.
 3. Copy the project-root `.env.example` to `.env` and set
@@ -52,6 +52,36 @@ explicit frontend origins to override them.
 Use `/ready` to confirm the backend has the required Supabase URL and
 server-side key configured before signing in.
 
+### Deploy the API and GitHub Pages frontend
+
+GitHub Pages hosts only the frontend; the API must also be deployed for sign-in,
+registration, and dashboards to work on other devices. This repository includes
+a Render Blueprint in [`render.yaml`](./render.yaml).
+
+1. Push `render.yaml` to the GitHub repository, then create a new Blueprint
+   deployment in Render from that repository. Set `SUPABASE_URL` to the same
+   Supabase project used by the frontend and `SUPABASE_SERVICE_ROLE_KEY` to
+   that project's server-side service-role or secret key. Enter the key only
+   in Render's environment settings; never commit it or use a `VITE_` variable.
+2. After Render deploys, open the service's `/health` URL and confirm it returns
+   `{"status":"ok"}`. Copy the service's base URL (for example,
+   `https://your-service.onrender.com`).
+3. Set `VITE_API_BASE_URL` in the project-root `.env` to that base URL, then
+   rebuild and publish the frontend:
+
+   ```powershell
+   npm.cmd run deploy
+   ```
+
+4. Open the GitHub Pages project URL
+   `https://rithwicksai-2007.github.io/Edu-Vacancy/`. The bare domain
+   `https://rithwicksai-2007.github.io/` is a separate user-site address and
+   does not host this project.
+
+The Render service allows the GitHub Pages origin and local Vite development
+origins by default. If the frontend uses a different domain, update
+`FRONTEND_ORIGINS` in Render to its origin (scheme and hostname, no path).
+
 Authenticated API requests must send
 `Authorization: Bearer {access_token}`. Main endpoint groups:
 
@@ -66,8 +96,11 @@ Authenticated API requests must send
 The job-seeker and institution dashboards load profiles, vacancies, candidates,
 applications, saved items, and moderation states through the authenticated API.
 Registration creates a Supabase Auth account through the backend and the
-database trigger creates its profile/detail rows. Resume and institution
-certificate files use the configured private Supabase Storage buckets.
+database trigger creates its profile/detail rows. Jobseeker profile photos and
+resumes are stored in the private job-seeker document bucket and recorded in
+`job_seeker_documents`; institution photos are stored in a separate private
+bucket and recorded in `institution_documents`. Profile and institution text
+details are stored in their respective detail tables.
 
 ### Username accounts
 
@@ -96,10 +129,17 @@ from the admin dashboard. Job-seeker and institution dashboards include an
 inbox where users can read messages and mark them as read. No external email
 delivery is configured.
 
-To grant an administrator, set `platform_role: "admin"` in the user's Supabase
-Auth **app metadata** (not user metadata), and ensure the matching `profiles`
-row has `role = 'admin'`. For an account already registered in this app, update
-its row in the SQL Editor using its trusted user UUID:
+Administrator access is restricted to the single Supabase Auth account whose
+UUID is configured as `ADMIN_USER_ID` in `Backend/.env`. Set this to your own
+Auth user UUID. The account must also have `platform_role: "admin"` in Supabase
+Auth **app metadata** (not user metadata), and its matching `profiles` row must
+have `role = 'admin'`. Other accounts are denied even if they are granted the
+admin metadata role. The row-level security helper in
+[`Backend/supabase/schema.sql`](./Backend/supabase/schema.sql) uses the same
+owner UUID, so rerun that schema in Supabase when changing the allowlisted
+account.
+
+For your account, update its row in the SQL Editor using your trusted user UUID:
 
 ```sql
 update public.profiles
@@ -107,8 +147,9 @@ set role = 'admin', status = 'Verified', status_reason = null
 where id = '00000000-0000-0000-0000-000000000000';
 ```
 
-Access tokens issued before the metadata change must be refreshed.
-The API never trusts a role supplied in editable user metadata.
+Set the same UUID as `ADMIN_USER_ID` in `Backend/.env`, then restart the backend.
+Access tokens issued before the metadata change must be refreshed. The API
+never trusts a role supplied in editable user metadata.
 
 ### Sign-in troubleshooting
 
@@ -126,15 +167,21 @@ The API never trusts a role supplied in editable user metadata.
   token or look up the administrator profile. `SUPABASE_URL` must be the same
   project URL as `VITE_SUPABASE_URL` in the frontend `.env`. Use a Supabase
   server-side `service_role` JWT or `sb_secret_` key, never the frontend
-  publishable key.
+  `sb_publishable_` key. If the backend says the configured key is publishable,
+  replace it with a server-side key from the same project's Supabase API
+  settings and restart the backend.
+- If the API reports that Supabase rejected the configured server key, replace
+  `SUPABASE_SERVICE_ROLE_KEY` in `Backend/.env` with a current key from the
+  same project as `SUPABASE_URL`, then restart the backend.
 - If `/api/v1/auth/me` returns 401 with a different-project message, correct
   `SUPABASE_URL`, restart the backend, then sign out and sign in again to get a
   token from the matching Supabase project. For legacy HS256 tokens, also set
   that project's `SUPABASE_JWT_SECRET`.
 - If the API reports that the account is not an administrator, confirm
   `platform_role: "admin"` is set in Supabase Auth **app metadata** and the
-  matching `profiles` row has `role = 'admin'`. Sign out and back in after
-  changing app metadata so the new access token includes the updated claim.
+  matching `profiles` row has `role = 'admin'`; confirm its Auth UUID matches
+  `ADMIN_USER_ID` in `Backend/.env`. Sign out and back in after changing app
+  metadata so the new access token includes the updated claim.
 - Sign in with the username and password for that Supabase Auth user. There is
   no built-in/default administrator password.
 

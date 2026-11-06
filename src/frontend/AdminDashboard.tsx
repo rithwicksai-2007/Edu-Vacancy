@@ -78,6 +78,8 @@ type AccountRecord = {
   job_seeker_details: { subject?: string; resume_url?: string | null } | null;
   institution_details: { institution_name?: string } | null;
   institution_certificates: { cert_type: string }[];
+  job_seeker_documents?: { document_type: string }[];
+  institution_documents?: { document_type: string }[];
 };
 
 type VacancyRecord = {
@@ -163,7 +165,21 @@ function mapAdminData(
             .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
             .join(" "),
         ),
-        ...(account.job_seeker_details?.resume_url ? ["Resume"] : []),
+        ...(account.institution_documents ?? []).map((file) =>
+          file.document_type
+            .split("_")
+            .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+            .join(" "),
+        ),
+        ...(account.job_seeker_documents ?? []).map((file) =>
+          file.document_type === "profile_photo" ? "Profile Photo" : "Resume",
+        ),
+        ...(account.job_seeker_details?.resume_url &&
+        !account.job_seeker_documents?.some(
+          (file) => file.document_type === "resume",
+        )
+          ? ["Resume"]
+          : []),
       ],
       reason: account.status_reason ?? undefined,
     })),

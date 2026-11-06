@@ -1,7 +1,7 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { Bell, PartyPopper, Sparkles, X } from "lucide-react";
+import { Bell, Download, PartyPopper, Sparkles, X } from "lucide-react";
 import {
   apiRequest,
   apiRequestAllPages,
@@ -69,6 +69,7 @@ type ProfileRecord = {
     years_experience: number;
     preferred_location: string;
     professional_summary: string;
+    profile_photo_url?: string | null;
   } | null;
 };
 
@@ -291,9 +292,11 @@ export default function JobSeekerDashboard() {
   const [savedJobs, setSavedJobs] = useState<string[]>([]);
   const [applications, setApplications] = useState<Application[]>([]);
   const [notifications, setNotifications] = useState<InAppNotification[]>([]);
+  const [notificationsUpdating, setNotificationsUpdating] = useState(false);
   const [storedProfilePhoto] = useState(readStoredProfilePhoto);
   const [storedDashboardSettings] = useState(readDashboardSettings);
   const [settings, setSettings] = useState(storedDashboardSettings.settings);
+  const [profilePhoto, setProfilePhoto] = useState(storedProfilePhoto.photo);
   const [notice, setNotice] = useState(
     storedProfilePhoto.error || storedDashboardSettings.error,
   );
@@ -313,7 +316,6 @@ export default function JobSeekerDashboard() {
   const [dashboardLoading, setDashboardLoading] = useState(true);
   const [accessToken, setAccessToken] = useState("");
   const [accountStatus, setAccountStatus] = useState("Pending");
-  const profilePhoto = storedProfilePhoto.photo;
   const [profile, setProfile] = useState({
     name: "",
     username: "",
@@ -404,7 +406,24 @@ export default function JobSeekerDashboard() {
               )
             : [];
 
+        let profilePhotoUrl = storedProfilePhoto.photo;
+        let profilePhotoError = "";
+        const profilePhotoPath = profileData.details?.profile_photo_url;
+        if (profilePhotoPath) {
+          const { data: signedPhoto, error: signedPhotoError } =
+            await supabase.storage
+              .from("job-seeker-documents")
+              .createSignedUrl(profilePhotoPath, 60 * 60);
+          if (signedPhotoError) {
+            profilePhotoError = `Unable to load your saved profile photo: ${signedPhotoError.message}`;
+          } else {
+            profilePhotoUrl = signedPhoto.signedUrl;
+          }
+        }
+
         if (!mounted) return;
+        setProfilePhoto(profilePhotoUrl);
+        if (profilePhotoError) setNotice(profilePhotoError);
         setAccessToken(session.access_token);
         userIdRef.current = account.id;
         seenHiredApplications.current = readSeenHiredApplications(account.id);
@@ -463,7 +482,11 @@ export default function JobSeekerDashboard() {
             : storedDashboardSettings.settings,
         );
         if (account.profile.status !== "Verified") {
-          setNotice("Your account is awaiting administrator verification. Applications are available after verification.");
+          setNotice((current) =>
+            current
+              ? `${current} Your account is awaiting administrator verification. Applications are available after verification.`
+              : "Your account is awaiting administrator verification. Applications are available after verification.",
+          );
         }
       } catch (error: unknown) {
         if (mounted) {
@@ -481,7 +504,7 @@ export default function JobSeekerDashboard() {
     return () => {
       mounted = false;
     };
-  }, [navigate, storedDashboardSettings.settings]);
+  }, [navigate, storedDashboardSettings.settings, storedProfilePhoto.photo]);
 
   useEffect(() => {
     if (!accessToken || accountStatus !== "Verified") return;
@@ -827,6 +850,77 @@ export default function JobSeekerDashboard() {
     }
   }
 
+  async function markAllNotificationsRead() {
+    const unread = notifications.filter((notification) => !notification.read_at);
+    if (unread.length === 0 || !accessToken || notificationsUpdating) return;
+
+    setNotificationsUpdating(true);
+    try {
+      const updated = await Promise.all(
+        unread.map((notification) =>
+          apiRequest<InAppNotification>(
+            accessToken,
+            `/api/v1/notifications/${notification.id}/read`,
+            { method: "PATCH" },
+          ),
+        ),
+      );
+      setNotifications((current) =>
+        current.map(
+          (notification) =>
+            updated.find((item) => item.id === notification.id) ?? notification,
+        ),
+      );
+    } catch (error: unknown) {
+      const message =
+        error instanceof Error ? error.message : "Unable to update notifications.";
+      try {
+        const refreshed = await apiRequest<InAppNotification[]>(
+          accessToken,
+          "/api/v1/notifications/mine",
+        );
+        setNotifications(refreshed);
+        setNotice(`${message} Notification statuses were refreshed.`);
+      } catch {
+        setNotice(message);
+      }
+    } finally {
+      setNotificationsUpdating(false);
+    }
+  }
+
+  function exportApplications() {
+    const applicationsToExport = applications
+      .map((application) => {
+        const job = jobs.find((item) => item.id === application.jobId);
+        return job ? [job.title, job.institution, job.location, job.category, application.status] : null;
+      })
+      .filter((row): row is string[] => row !== null);
+    if (applicationsToExport.length === 0) return;
+
+    const escapeCell = (value: string) => {
+      const safeValue = /^[\t\r ]*[=+\-@]/.test(value) ? `'${value}` : value;
+      return `"${safeValue.replaceAll('"', '""')}"`;
+    };
+    const csv = [
+      ["Job title", "Institution", "Location", "Category", "Status"],
+      ...applicationsToExport,
+    ]
+      .map((row) => row.map(escapeCell).join(","))
+      .join("\r\n");
+    const url = URL.createObjectURL(
+      new Blob(["\uFEFF", csv], { type: "text/csv;charset=utf-8" }),
+    );
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = "educareer-applications.csv";
+    document.body.append(link);
+    link.click();
+    link.remove();
+    window.setTimeout(() => URL.revokeObjectURL(url), 1000);
+    setNotice(`${applicationsToExport.length} application${applicationsToExport.length === 1 ? "" : "s"} exported.`);
+  }
+
   const unreadNotificationCount = notifications.filter((item) => !item.read_at).length;
 
   const heading =
@@ -1160,11 +1254,23 @@ export default function JobSeekerDashboard() {
             {/* Profile page */}
             {activePage === "Notifications" ? (
               <section className="mx-auto max-w-4xl rounded-2xl border border-slate-200 bg-white p-5 sm:p-7">
-                <div className="mb-5">
-                  <h3 className="text-lg font-bold text-slate-900">Platform inbox</h3>
-                  <p className="mt-1 text-sm text-slate-500">
-                    Important updates from the EduVacancy administrators.
-                  </p>
+                <div className="mb-5 flex flex-wrap items-start justify-between gap-3">
+                  <div>
+                    <h3 className="text-lg font-bold text-slate-900">Platform inbox</h3>
+                    <p className="mt-1 text-sm text-slate-500">
+                      Important updates from the EduVacancy administrators.
+                    </p>
+                  </div>
+                  {unreadNotificationCount > 0 && (
+                    <button
+                      type="button"
+                      onClick={() => void markAllNotificationsRead()}
+                      disabled={notificationsUpdating}
+                      className="rounded-lg px-3 py-2 text-sm font-semibold text-violet-700 hover:bg-violet-50 disabled:cursor-wait disabled:opacity-60"
+                    >
+                      {notificationsUpdating ? "Updating..." : `Mark all ${unreadNotificationCount} as read`}
+                    </button>
+                  )}
                 </div>
                 {notifications.length === 0 ? (
                   <p className="py-10 text-center text-sm text-slate-500">
@@ -1798,6 +1904,17 @@ export default function JobSeekerDashboard() {
                         </select>
                       </div>
                     </div>
+                    {activePage === "My Applications" && (
+                      <button
+                        type="button"
+                        onClick={exportApplications}
+                        disabled={applications.length === 0}
+                        className="mb-4 inline-flex items-center gap-2 rounded-xl border border-slate-200 bg-white px-3.5 py-2 text-sm font-semibold text-slate-700 transition hover:border-violet-200 hover:bg-violet-50 disabled:cursor-not-allowed disabled:opacity-50"
+                      >
+                        <Download size={16} aria-hidden="true" />
+                        Export applications
+                      </button>
+                    )}
 
                     <div className="mb-4 flex flex-wrap gap-2">
                       {["All", "Full-time", "Part-time"].map((type) => (

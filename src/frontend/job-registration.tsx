@@ -3,8 +3,12 @@ import { useRef, useState, type ChangeEvent, type FormEvent } from "react";
 import { Link } from "react-router-dom";
 import { getSupabaseClient, usernameAuthEmail } from "../lib/supabase-config";
 import { apiPublicRequest } from "../lib/api-config";
-import { JOB_SEEKER_PROFILE_PHOTO_KEY } from "../lib/job-seeker-profile";
 import { getAuthErrorMessage } from "../lib/auth-error";
+import { useAppDialog } from "../components/AppDialogContext";
+import {
+  RegistrationLegalDialog,
+  type RegistrationLegalDocument,
+} from "./registration-legal";
 
 type RegistrationData = {
   username: string;
@@ -15,7 +19,9 @@ type RegistrationData = {
   fullName: string;
   phone: string;
   subject: string;
+  otherSubject: string;
   qualification: string;
+  otherQualification: string;
   experience: string;
   location: string;
   terms: boolean;
@@ -30,7 +36,9 @@ const initialData: RegistrationData = {
   fullName: "",
   phone: "",
   subject: "",
+  otherSubject: "",
   qualification: "",
+  otherQualification: "",
   experience: "",
   location: "",
   terms: false,
@@ -43,25 +51,87 @@ const questions = [
   "Your favourite subject in school?",
 ];
 
-const subjects = [
+const schoolSubjects = [
+  "Primary / Foundational",
   "Mathematics",
   "English",
+  "Hindi",
+  "Regional Language",
+  "Sanskrit",
   "Science",
+  "General Science",
+  "Physics",
+  "Chemistry",
+  "Biology",
+  "Environmental Studies",
   "Social Studies",
+  "History",
+  "Geography",
+  "Civics / Political Science",
+  "Economics",
   "Computer Science",
-  "Primary / Foundational",
+  "Information Technology",
   "Physical Education",
-  "Other",
+  "Art & Craft",
+  "Music",
+];
+
+const collegeSubjects = [
+  "Commerce & Accountancy",
+  "Business Studies",
+  "English Literature",
+  "Mathematics",
+  "Physics",
+  "Chemistry",
+  "Biology",
+  "Botany",
+  "Zoology",
+  "Computer Science",
+  "Information Technology",
+  "Data Science",
+  "Artificial Intelligence / Machine Learning",
+  "Electronics",
+  "Electrical Engineering",
+  "Mechanical Engineering",
+  "Civil Engineering",
+  "Law",
+  "Management",
+  "Psychology",
+  "Sociology",
+  "Education",
+  "Nursing / Healthcare",
+  "Agriculture",
+  "Design",
 ];
 
 const qualifications = [
+  "Class 10 / Secondary",
+  "Class 12 / Senior Secondary",
+  "Diploma",
+  "ITI / Vocational Certificate",
+  "B.A",
+  "B.Sc",
+  "B.Com",
+  "B.E / B.Tech",
+  "BBA / BCA",
   "B.Ed",
-  "M.Ed",
   "B.A / B.Sc + B.Ed",
-  "M.A / M.Sc",
-  "Ph.D",
   "D.El.Ed",
+  "M.A",
+  "M.Sc",
+  "M.A / M.Sc",
+  "M.Com",
+  "M.E / M.Tech",
+  "MBA",
+  "MCA",
+  "M.Ed",
+  "M.Phil",
+  "Ph.D",
+  "NET Qualified",
+  "SET Qualified",
+  "NET / SET Qualified",
   "NET/SET Qualified",
+  "Other",
 ];
 
 const inputClass =
@@ -71,13 +141,17 @@ const labelClass =
   "mb-1.5 block text-[12.5px] font-bold text-[#1C2333]";
 
 export default function JobRegistration() {
+  const { showAlert } = useAppDialog();
   const [step, setStep] = useState(1);
   const [data, setData] = useState<RegistrationData>(initialData);
   const [showPassword, setShowPassword] = useState(false);
   const [showConfirmPassword, setShowConfirmPassword] = useState(false);
   const [resume, setResume] = useState<File | null>(null);
   const [profilePhoto, setProfilePhoto] = useState<string | null>(null);
+  const [profilePhotoFile, setProfilePhotoFile] = useState<File | null>(null);
   const [profilePhotoName, setProfilePhotoName] = useState("");
+  const [legalDocument, setLegalDocument] =
+    useState<RegistrationLegalDocument | null>(null);
   const [message, setMessage] = useState("");
   const [messageType, setMessageType] = useState<"success" | "error">("error");
   const [loading, setLoading] = useState(false);
@@ -137,6 +211,12 @@ export default function JobRegistration() {
         field.focus();
         return false;
       }
+    }
+
+    if (step === 2 && !profilePhoto) {
+      setMessage("Please upload a valid profile photo to continue.");
+      setMessageType("error");
+      return false;
     }
 
     if (
@@ -231,13 +311,32 @@ export default function JobRegistration() {
         return;
       }
 
-      setProfilePhoto(reader.result);
-      setProfilePhotoName(file.name);
-      setMessage("");
+      const photoData = reader.result;
+      const image = new Image();
+      image.onload = () => {
+        if (!image.naturalWidth || !image.naturalHeight) {
+          setMessage("Please select a valid image for your profile photo.");
+          setMessageType("error");
+          event.target.value = "";
+          return;
+        }
+
+        setProfilePhoto(photoData);
+        setProfilePhotoFile(file);
+        setProfilePhotoName(file.name);
+        setMessage("");
+      };
+      image.onerror = () => {
+        setMessage("Please select a valid image for your profile photo.");
+        setMessageType("error");
+        event.target.value = "";
+      };
+      image.src = photoData;
     };
     reader.onerror = () => {
       setMessage("The selected photo could not be read. Please try another image.");
       setMessageType("error");
+      event.target.value = "";
     };
     reader.readAsDataURL(file);
   };
@@ -268,6 +367,7 @@ export default function JobRegistration() {
     setLoading(true);
     setMessage("");
 
+    let createdUserId: string | null = null;
     try {
       const supabaseClient = getSupabaseClient();
       const answerHash = await hashAnswer(data.securityAnswer);
@@ -282,12 +382,19 @@ export default function JobRegistration() {
           phone: data.phone.trim(),
           security_question: data.securityQuestion,
           security_answer_hash: answerHash,
-          subject: data.subject,
-          qualification: data.qualification,
+          subject:
+            data.subject === "Other"
+              ? data.otherSubject.trim()
+              : data.subject,
+          qualification:
+            data.qualification === "Other"
+              ? data.otherQualification.trim()
+              : data.qualification,
           years_experience: Number(data.experience),
           preferred_location: data.location.trim(),
         }),
       });
+      createdUserId = account.id;
       const { data: authData, error: signInError } =
         await supabaseClient.auth.signInWithPassword({
           email: usernameAuthEmail(username),
@@ -301,61 +408,125 @@ export default function JobRegistration() {
       const userId = account.id;
 
       let resumeUploadWarning = false;
+      const uploadedPaths: string[] = [];
+      if (!profilePhotoFile) {
+        throw new Error("Please upload a valid profile photo before registration.");
+      }
+
+      const photoPath = `${userId}/${crypto.randomUUID()}-${profilePhotoFile.name.replace(/[^a-zA-Z0-9._-]/g, "_")}`;
+      const { error: photoUploadError } = await supabaseClient.storage
+        .from("job-seeker-documents")
+        .upload(photoPath, profilePhotoFile, {
+          contentType: profilePhotoFile.type,
+          upsert: false,
+        });
+      if (photoUploadError) {
+        throw new Error(`Your account was created, but the profile photo could not be uploaded: ${photoUploadError.message}`);
+      }
+      uploadedPaths.push(photoPath);
+
+      let resumePath: string | null = null;
       if (resume) {
         const safeFileName = resume.name.replace(/[^a-zA-Z0-9._-]/g, "_");
         const path = `${userId}/${crypto.randomUUID()}-${safeFileName}`;
 
         const { error: uploadError } = await supabaseClient.storage
-          .from("resumes")
+          .from("job-seeker-documents")
           .upload(path, resume, { upsert: false });
 
         if (uploadError) {
           resumeUploadWarning = true;
         } else {
-          const { error: resumeUpdateError } = await supabaseClient
-            .from("job_seeker_details")
-            .update({ resume_url: path })
-            .eq("id", userId);
-
-          if (resumeUpdateError) {
-            await supabaseClient.storage.from("resumes").remove([path]);
-            resumeUploadWarning = true;
-          }
+          resumePath = path;
+          uploadedPaths.push(path);
         }
       }
 
-      let photoSaveWarning = false;
-      try {
-        if (profilePhoto) {
-          window.localStorage.setItem(
-            JOB_SEEKER_PROFILE_PHOTO_KEY,
-            profilePhoto,
-          );
-        } else {
-          window.localStorage.removeItem(JOB_SEEKER_PROFILE_PHOTO_KEY);
+      const { error: detailsError } = await supabaseClient
+        .from("job_seeker_details")
+        .update({
+          profile_photo_url: photoPath,
+          ...(resumePath ? { resume_url: resumePath } : {}),
+        })
+        .eq("id", userId);
+      if (detailsError) {
+        const { error: cleanupError } = await supabaseClient.storage
+          .from("job-seeker-documents")
+          .remove(uploadedPaths);
+        if (cleanupError) {
+          console.error("Could not clean up jobseeker files after profile update failed.", cleanupError);
         }
-      } catch {
-        photoSaveWarning = true;
+        throw new Error(`Your account was created, but profile details could not be saved: ${detailsError.message}`);
+      }
+
+      const documents = [
+        {
+          job_seeker_id: userId,
+          document_type: "profile_photo" as const,
+          storage_path: photoPath,
+          original_file_name: profilePhotoFile.name,
+          content_type: profilePhotoFile.type,
+          file_size: profilePhotoFile.size,
+        },
+        ...(resumePath && resume
+          ? [{
+              job_seeker_id: userId,
+              document_type: "resume" as const,
+              storage_path: resumePath,
+              original_file_name: resume.name,
+              content_type: resume.type,
+              file_size: resume.size,
+            }]
+          : []),
+      ];
+      const { error: documentsError } = await supabaseClient
+        .from("job_seeker_documents")
+        .insert(documents);
+      if (documentsError) {
+        const { error: cleanupError } = await supabaseClient.storage
+          .from("job-seeker-documents")
+          .remove(uploadedPaths);
+        if (cleanupError) {
+          console.error("Could not clean up jobseeker files after document records failed.", cleanupError);
+        }
+        const { error: detailsCleanupError } = await supabaseClient
+          .from("job_seeker_details")
+          .update({ profile_photo_url: null, resume_url: null })
+          .eq("id", userId);
+        if (detailsCleanupError) {
+          console.error("Could not clear jobseeker file references after document records failed.", detailsCleanupError);
+        }
+        throw new Error(`Your account was created, but uploaded files could not be recorded: ${documentsError.message}`);
       }
 
       setMessageType("success");
       setMessage(
         resumeUploadWarning
-          ? "Account created successfully. Log in with your username and upload your resume. Your account is awaiting administrator verification."
-          : photoSaveWarning
-            ? "Account created successfully, but your photo could not be saved in this browser. Check your browser storage and try again."
-            : "Account created successfully. You can now log in with your username. Your account is awaiting administrator verification.",
+          ? "Account created successfully. Your profile photo is saved. Your resume could not be uploaded. Your account is awaiting administrator verification."
+          : "Account created successfully. Your profile photo and registration details are saved. Your account is awaiting administrator verification.",
+      );
+      await showAlert(
+        resumeUploadWarning
+          ? "Registration successful. Your profile photo and details are saved, but your resume could not be uploaded. Your account is awaiting administrator verification."
+          : "Registration successful. Your profile photo and details are saved. You can now log in with your username; your account is awaiting administrator verification.",
       );
 
       setData(initialData);
       setResume(null);
       setProfilePhoto(null);
+      setProfilePhotoFile(null);
       setProfilePhotoName("");
       setStep(1);
       formRef.current?.reset();
     } catch (error: unknown) {
       setMessageType("error");
-      setMessage(getAuthErrorMessage(error));
+      const errorMessage = getAuthErrorMessage(error);
+      setMessage(errorMessage);
+      await showAlert(
+        createdUserId
+          ? `Account created, but registration could not be completed.\n${errorMessage}`
+          : `Registration unsuccessful.\n${errorMessage}`,
+      );
     } finally {
       setLoading(false);
     }
@@ -645,7 +816,7 @@ export default function JobRegistration() {
               {step === 2 && (
                 <div data-step="2" className="animate-[fadeIn_0.25s_ease]">
                   <div className="mb-5">
-                    <label className={labelClass}>Profile photo (optional)</label>
+                    <label className={labelClass}>Profile photo</label>
                     <div className="flex items-center gap-4 rounded-xl border border-[#E7EAF3] p-4">
                       <div className="flex h-16 w-16 shrink-0 items-center justify-center overflow-hidden rounded-full bg-[#EEF2FF] text-2xl text-[#2C5CF6]">
                         {profilePhoto ? (
@@ -724,11 +895,19 @@ export default function JobRegistration() {
                         id="phone"
                         type="tel"
                         required
+                        inputMode="numeric"
+                        pattern="[0-9]{10}"
+                        maxLength={10}
                         autoComplete="tel"
                         className={inputClass}
-                        placeholder="+91 98765 43210"
+                        placeholder="10-digit phone number"
                         value={data.phone}
-                        onChange={(e) => updateField("phone", e.target.value)}
+                        onChange={(e) =>
+                          updateField(
+                            "phone",
+                            e.target.value.replace(/\D/g, "").slice(0, 10),
+                          )
+                        }
                       />
                     </div>
                   </div>
@@ -748,11 +927,38 @@ export default function JobRegistration() {
                         }
                       >
                         <option value="">Select...</option>
-                        {subjects.map((subject) => (
-                          <option key={subject}>{subject}</option>
-                        ))}
+                        <optgroup label="School subjects">
+                          {schoolSubjects.map((subject) => (
+                            <option key={subject}>{subject}</option>
+                          ))}
+                        </optgroup>
+                        <optgroup label="College subjects & specializations">
+                          {collegeSubjects.map((subject) => (
+                            <option key={subject}>{subject}</option>
+                          ))}
+                        </optgroup>
+                        <option>Other</option>
                       </select>
                     </div>
+
+                    {data.subject === "Other" && (
+                      <div className="mb-4">
+                        <label htmlFor="otherSubject" className={labelClass}>
+                          Enter your subject / specialization
+                        </label>
+                        <input
+                          id="otherSubject"
+                          required
+                          maxLength={120}
+                          className={inputClass}
+                          placeholder="e.g. Biotechnology"
+                          value={data.otherSubject}
+                          onChange={(e) =>
+                            updateField("otherSubject", e.target.value)
+                          }
+                        />
+                      </div>
+                    )}
 
                     <div className="mb-4">
                       <label htmlFor="qualification" className={labelClass}>
@@ -773,6 +979,28 @@ export default function JobRegistration() {
                         ))}
                       </select>
                     </div>
+
+                    {data.qualification === "Other" && (
+                      <div className="mb-4">
+                        <label
+                          htmlFor="otherQualification"
+                          className={labelClass}
+                        >
+                          Enter your highest qualification
+                        </label>
+                        <input
+                          id="otherQualification"
+                          required
+                          maxLength={240}
+                          className={inputClass}
+                          placeholder="Enter your qualification"
+                          value={data.otherQualification}
+                          onChange={(e) =>
+                            updateField("otherQualification", e.target.value)
+                          }
+                        />
+                      </div>
+                    )}
                   </div>
 
                   <div className="grid grid-cols-1 gap-0 sm:grid-cols-2 sm:gap-3">
@@ -889,6 +1117,7 @@ export default function JobRegistration() {
                       id="terms"
                       type="checkbox"
                       required
+                      aria-label="I confirm my details are accurate and agree to the Terms of Service and Privacy Policy"
                       checked={data.terms}
                       onChange={(e) =>
                         updateField("terms", e.target.checked)
@@ -896,23 +1125,25 @@ export default function JobRegistration() {
                       className="mt-1 h-4 w-4 shrink-0 accent-[#2C5CF6]"
                     />
 
-                    <label htmlFor="terms">
-                      I agree to EduVacancy&apos;s{" "}
-                      <a
-                        href="/terms"
-                        className="font-semibold text-[#2C5CF6]"
+                    <div>
+                      I confirm my details are accurate and agree to{" "}
+                      <button
+                        type="button"
+                        onClick={() => setLegalDocument("terms")}
+                        className="font-semibold text-[#2C5CF6] hover:underline"
                       >
                         Terms of Service
-                      </a>{" "}
+                      </button>{" "}
                       and{" "}
-                      <a
-                        href="/privacy"
-                        className="font-semibold text-[#2C5CF6]"
+                      <button
+                        type="button"
+                        onClick={() => setLegalDocument("privacy")}
+                        className="font-semibold text-[#2C5CF6] hover:underline"
                       >
                         Privacy Policy
-                      </a>
+                      </button>
                       .
-                    </label>
+                    </div>
                   </div>
 
                   <div className="mt-5 flex flex-col gap-2.5 sm:flex-row">
@@ -962,18 +1193,16 @@ export default function JobRegistration() {
               </Link>
             </p>
 
-            <p className="mt-3 text-center text-[13px] text-[#6B7280]">
-              Hiring teachers instead?{" "}
-              <Link
-                to="/college-login"
-                className="font-bold text-[#2C5CF6] hover:underline"
-              >
-                Register your institution
-              </Link>
-            </p>
           </div>
         </section>
       </div>
+
+      {legalDocument && (
+        <RegistrationLegalDialog
+          document={legalDocument}
+          onClose={() => setLegalDocument(null)}
+        />
+      )}
 
       <style>{`
         @import url('https://fonts.googleapis.com/css2?family=Poppins:wght@600;700&family=Inter:wght@400;500;600;700&display=swap');

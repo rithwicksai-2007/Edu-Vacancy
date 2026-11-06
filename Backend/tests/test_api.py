@@ -8,23 +8,120 @@ import jwt
 from fastapi import HTTPException
 from fastapi.security import HTTPAuthorizationCredentials
 from postgrest.exceptions import APIError
+from pydantic import ValidationError
 
 from Backend.main import (
     app,
     admin_send_notification,
     admin_overview,
+    admin_accounts,
     admin_vacancies,
     create_username_account,
     execute_response,
     get_settings,
     get_user_claims,
+    read_current_user,
     require_admin,
     username_auth_email,
 )
-from Backend.schemas import AdminNotificationCreate
+from Backend.schemas import (
+    AdminNotificationCreate,
+    InstitutionRegistration,
+    JobSeekerRegistration,
+)
 
 
 class ApiContractTests(unittest.TestCase):
+    def test_job_seeker_registration_requires_ten_digit_phone(self) -> None:
+        registration = {
+            "username": "sample.user",
+            "password": "long-password",
+            "full_name": "Sample User",
+            "security_question": "First school you attended?",
+            "security_answer_hash": "a" * 64,
+        }
+
+        payload = JobSeekerRegistration(**registration, phone="9876543210")
+        self.assertEqual(payload.phone, "9876543210")
+
+        for phone in ("123456789", "12345678901", "12345abc90", "+9198765432"):
+            with self.subTest(phone=phone), self.assertRaises(ValidationError):
+                JobSeekerRegistration(**registration, phone=phone)
+
+    def test_institution_registration_requires_ten_digit_phone(self) -> None:
+        registration = {
+            "username": "sample.school",
+            "password": "long-password",
+            "full_name": "Sample School",
+            "security_question": "Year the institution was established?",
+            "security_answer_hash": "a" * 64,
+            "institution_name": "Sample School",
+            "institution_type": "School",
+            "address": "Main Road",
+            "contact_person": "Sample Contact",
+            "contact_designation": "Principal",
+            "registration_number": "REG-123",
+            "city": "Hyderabad",
+            "state": "Telangana",
+            "pincode": "500001",
+        }
+
+        payload = InstitutionRegistration(**registration, phone="9876543210")
+        self.assertEqual(payload.phone, "9876543210")
+
+        for phone in ("123456789", "12345678901", "12345abc90", "+9198765432"):
+            with self.subTest(phone=phone), self.assertRaises(ValidationError):
+                InstitutionRegistration(**registration, phone=phone)
+
+    @patch.dict("os.environ", {"ADMIN_USER_ID": "00000000-0000-0000-0000-000000000001"})
+    def test_admin_accounts_query_does_not_depend_on_optional_document_tables(self) -> None:
+        get_settings.cache_clear()
+        self.addCleanup(get_settings.cache_clear)
+
+        class Query:
+            selected_columns = ""
+
+            def select(self, columns: str) -> "Query":
+                self.selected_columns = columns
+                return self
+
+            def eq(self, *_args: object) -> "Query":
+                return self
+
+            def order(self, *_args: object, **_kwargs: object) -> "Query":
+                return self
+
+            def range(self, *_args: object) -> "Query":
+                return self
+
+            def execute(self) -> object:
+                return type("Response", (), {"data": []})()
+
+        query = Query()
+
+        class Database:
+            def table(self, name: str) -> Query:
+                if name != "profiles":
+                    raise AssertionError(f"Unexpected table: {name}")
+                return query
+
+        accounts = admin_accounts(
+            role=None,
+            account_status=None,
+            limit=50,
+            offset=0,
+            claims={
+                "sub": "00000000-0000-0000-0000-000000000001",
+                "app_metadata": {"platform_role": "admin"},
+            },
+            db=Database(),
+        )
+
+        self.assertEqual(accounts, [])
+        self.assertIn("institution_certificates", query.selected_columns)
+        self.assertNotIn("job_seeker_documents", query.selected_columns)
+        self.assertNotIn("institution_documents", query.selected_columns)
+
     def test_username_login_address_uses_private_synthetic_domain(self) -> None:
         self.assertEqual(
             username_auth_email("My.User"),
@@ -85,7 +182,11 @@ class ApiContractTests(unittest.TestCase):
             {"role": "job_seeker", "username": "sample.user", "full_name": "Sample User"},
         )
 
+    @patch.dict("os.environ", {"ADMIN_USER_ID": "00000000-0000-0000-0000-000000000001"})
     def test_admin_notification_broadcasts_and_records_audit(self) -> None:
+        get_settings.cache_clear()
+        self.addCleanup(get_settings.cache_clear)
+
         class Query:
             def __init__(self, table_name: str, db: "Database") -> None:
                 self.table_name = table_name
@@ -144,7 +245,11 @@ class ApiContractTests(unittest.TestCase):
             "Sent notification",
         )
 
+    @patch.dict("os.environ", {"ADMIN_USER_ID": "00000000-0000-0000-0000-000000000001"})
     def test_admin_notification_requires_server_managed_admin_claim(self) -> None:
+        get_settings.cache_clear()
+        self.addCleanup(get_settings.cache_clear)
+
         class Database:
             def table(self, _name: str) -> None:
                 raise AssertionError("Database must not be accessed before admin check")
@@ -158,7 +263,11 @@ class ApiContractTests(unittest.TestCase):
 
         self.assertEqual(raised.exception.status_code, 403)
 
+    @patch.dict("os.environ", {"ADMIN_USER_ID": "00000000-0000-0000-0000-000000000001"})
     def test_admin_vacancies_returns_pending_submissions(self) -> None:
+        get_settings.cache_clear()
+        self.addCleanup(get_settings.cache_clear)
+
         pending_vacancy = {
             "id": "vacancy-id",
             "title": "Teacher",
@@ -189,7 +298,10 @@ class ApiContractTests(unittest.TestCase):
             vacancy_status=None,
             limit=50,
             offset=0,
-            claims={"sub": "admin-id", "app_metadata": {"platform_role": "admin"}},
+            claims={
+                "sub": "00000000-0000-0000-0000-000000000001",
+                "app_metadata": {"platform_role": "admin"},
+            },
             db=Database(),
         )
 
@@ -211,7 +323,23 @@ class ApiContractTests(unittest.TestCase):
         self.assertEqual(raised.exception.status_code, 502)
         self.assertIn("Backend/supabase/schema.sql", raised.exception.detail)
 
+    def test_unregistered_supabase_key_returns_actionable_error(self) -> None:
+        class InvalidKeyQuery:
+            def execute(self) -> None:
+                raise APIError({"message": "Unregistered API key"})
+
+        with self.assertRaises(HTTPException) as raised:
+            execute_response(InvalidKeyQuery())
+
+        self.assertEqual(raised.exception.status_code, 503)
+        self.assertIn("SUPABASE_SERVICE_ROLE_KEY", raised.exception.detail)
+        self.assertIn("Backend/.env", raised.exception.detail)
+
+    @patch.dict("os.environ", {"ADMIN_USER_ID": "00000000-0000-0000-0000-000000000001"})
     def test_admin_overview_returns_counts_without_account_update_payload(self) -> None:
+        get_settings.cache_clear()
+        self.addCleanup(get_settings.cache_clear)
+
         class CountQuery:
             def select(self, *_args: object, **_kwargs: object) -> "CountQuery":
                 return self
@@ -227,7 +355,10 @@ class ApiContractTests(unittest.TestCase):
                 return CountQuery()
 
         result = admin_overview(
-            {"sub": "admin-id", "app_metadata": {"platform_role": "admin"}},
+            {
+                "sub": "00000000-0000-0000-0000-000000000001",
+                "app_metadata": {"platform_role": "admin"},
+            },
             Database(),
         )
 
@@ -319,6 +450,8 @@ class ApiContractTests(unittest.TestCase):
         response = asyncio.run(get_readiness())
 
         self.assertEqual(response.status_code, 503)
+        self.assertIn("publishable browser key", response.json()["detail"])
+        self.assertIn("SUPABASE_SERVICE_ROLE_KEY", response.json()["detail"])
         get_settings.cache_clear()
 
     @patch.dict(
@@ -378,15 +511,104 @@ class ApiContractTests(unittest.TestCase):
         self.assertEqual(response.status_code, 401)
         self.assertEqual(response.headers["www-authenticate"], "Bearer")
 
+    @patch.dict("os.environ", {"ADMIN_USER_ID": "00000000-0000-0000-0000-000000000001"})
     def test_admin_requires_privileged_app_metadata(self) -> None:
+        get_settings.cache_clear()
         with self.assertRaises(HTTPException) as raised:
-            require_admin({"sub": "user-id", "app_metadata": {"role": "admin"}})
+            require_admin(
+                {
+                    "sub": "00000000-0000-0000-0000-000000000001",
+                    "app_metadata": {"role": "admin"},
+                }
+            )
 
         self.assertEqual(raised.exception.status_code, 403)
+        get_settings.cache_clear()
 
-    def test_admin_claim_uses_server_managed_platform_role(self) -> None:
+    @patch.dict("os.environ", {"ADMIN_USER_ID": "00000000-0000-0000-0000-000000000001"})
+    def test_admin_claim_allows_only_configured_user_with_server_role(self) -> None:
+        get_settings.cache_clear()
         require_admin(
-            {"sub": "user-id", "app_metadata": {"platform_role": "admin"}}
+            {
+                "sub": "00000000-0000-0000-0000-000000000001",
+                "app_metadata": {"platform_role": "admin"},
+            }
+        )
+        with self.assertRaises(HTTPException) as raised:
+            require_admin(
+                {
+                    "sub": "00000000-0000-0000-0000-000000000002",
+                    "app_metadata": {"platform_role": "admin"},
+                }
+            )
+        self.assertEqual(raised.exception.status_code, 403)
+        get_settings.cache_clear()
+
+    @patch.dict("os.environ", {"ADMIN_USER_ID": ""})
+    def test_admin_access_fails_closed_without_configured_owner(self) -> None:
+        get_settings.cache_clear()
+        with self.assertRaises(HTTPException) as raised:
+            require_admin(
+                {
+                    "sub": "00000000-0000-0000-0000-000000000001",
+                    "app_metadata": {"platform_role": "admin"},
+                }
+            )
+        self.assertEqual(raised.exception.status_code, 503)
+        self.assertIn("ADMIN_USER_ID", raised.exception.detail)
+        get_settings.cache_clear()
+
+    @patch.dict("os.environ", {"ADMIN_USER_ID": "00000000-0000-0000-0000-000000000001"})
+    def test_current_user_exposes_admin_role_only_for_configured_owner(self) -> None:
+        get_settings.cache_clear()
+        self.addCleanup(get_settings.cache_clear)
+
+        class ProfileQuery:
+            def select(self, *_args: object) -> "ProfileQuery":
+                return self
+
+            def eq(self, *_args: object) -> "ProfileQuery":
+                return self
+
+            def limit(self, _value: int) -> "ProfileQuery":
+                return self
+
+            def execute(self) -> object:
+                return type(
+                    "Response",
+                    (),
+                    {
+                        "data": [
+                            {
+                                "id": "00000000-0000-0000-0000-000000000001",
+                                "role": "admin",
+                                "username": "owner",
+                                "full_name": "Platform Owner",
+                                "phone": "",
+                                "status": "Verified",
+                                "status_reason": None,
+                                "created_at": "2026-01-01T00:00:00Z",
+                            }
+                        ]
+                    },
+                )()
+
+        class Database:
+            def table(self, _name: str) -> ProfileQuery:
+                return ProfileQuery()
+
+        owner_claims = {
+            "sub": "00000000-0000-0000-0000-000000000001",
+            "app_metadata": {"platform_role": "admin"},
+        }
+        other_admin_claims = {
+            "sub": "00000000-0000-0000-0000-000000000002",
+            "app_metadata": {"platform_role": "admin"},
+        }
+
+        self.assertEqual(read_current_user(owner_claims, Database())["platform_role"], "admin")
+        self.assertIsNone(
+            read_current_user(other_admin_claims, Database())["platform_role"]
         )
 
     @patch.dict(

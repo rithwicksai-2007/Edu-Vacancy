@@ -64,6 +64,8 @@ class Settings:
             "SUPABASE_JWT_SECRET", ""
             ).strip()
 
+        self.admin_user_id = os.getenv("ADMIN_USER_ID", "").strip()
+
         configured_origins = os.getenv("FRONTEND_ORIGINS")
         self.frontend_origins = (
             [
@@ -80,18 +82,45 @@ class Settings:
         return f"{self.supabase_url}/auth/v1"
 
     @property
-    def supabase_configured(self) -> bool:
-        service_key = self.supabase_service_role_key.lower()
+    def admin_user_uuid(self) -> UUID | None:
+        try:
+            return UUID(self.admin_user_id)
+        except ValueError:
+            return None
+
+    @property
+    def supabase_configuration_error(self) -> str | None:
+        if not self.supabase_url:
+            return "Set SUPABASE_URL in Backend/.env."
+
         parsed_url = urlparse(self.supabase_url)
-        return bool(
-            parsed_url.scheme in {"http", "https"}
-            and parsed_url.hostname
-            and "your-project" not in parsed_url.hostname.lower()
-            and (
-                service_key.startswith("eyj")
-                or service_key.startswith("sb_secret_")
+        if (
+            parsed_url.scheme not in {"http", "https"}
+            or not parsed_url.hostname
+            or "your-project" in parsed_url.hostname.lower()
+        ):
+            return "Set SUPABASE_URL to the URL of your Supabase project."
+
+        service_key = self.supabase_service_role_key.lower()
+        if service_key.startswith("sb_publishable_"):
+            return (
+                "SUPABASE_SERVICE_ROLE_KEY is a publishable browser key. Set it "
+                "to a server-side service_role JWT or sb_secret_ key from this "
+                "project's Supabase API settings."
             )
-        )
+        if not (
+            service_key.startswith("eyj")
+            or service_key.startswith("sb_secret_")
+        ):
+            return (
+                "Set SUPABASE_SERVICE_ROLE_KEY in Backend/.env to a server-side "
+                "service_role JWT or sb_secret_ key from this Supabase project."
+            )
+        return None
+
+    @property
+    def supabase_configured(self) -> bool:
+        return self.supabase_configuration_error is None
 
 
 @lru_cache
@@ -105,7 +134,7 @@ def get_supabase_client() -> Any:
     if not settings.supabase_configured:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="Supabase is not configured. Set SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY.",
+            detail=settings.supabase_configuration_error,
         )
     return create_client(settings.supabase_url, settings.supabase_service_role_key)
 
@@ -115,6 +144,15 @@ def execute_response(query: Any) -> Any:
         response = query.execute()
     except APIError as error:
         logger.error("Supabase rejected an API request: %s", error.code)
+        if error.message and error.message.lower() == "unregistered api key":
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail=(
+                    "Supabase rejected the configured server key. Set "
+                    "SUPABASE_SERVICE_ROLE_KEY in Backend/.env to a valid key "
+                    "for the configured project, then restart the backend."
+                ),
+            ) from error
         if error.code in {"PGRST204", "PGRST205", "42P01", "42703"}:
             detail = (
                 "The Supabase database schema is missing or out of date. "
@@ -251,8 +289,22 @@ def get_user_claims(
 
 
 def require_admin(claims: dict[str, Any]) -> None:
+    settings = get_settings()
+    if settings.admin_user_uuid is None:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=(
+                "Administrator access is disabled. Set ADMIN_USER_ID in "
+                "Backend/.env to the authorized Supabase Auth user UUID."
+            ),
+        )
+
     app_metadata = claims.get("app_metadata")
-    if not isinstance(app_metadata, dict) or app_metadata.get("platform_role") != "admin":
+    if (
+        not isinstance(app_metadata, dict)
+        or app_metadata.get("platform_role") != "admin"
+        or claims.get("sub") != str(settings.admin_user_uuid)
+    ):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Administrator access is required.",
@@ -359,7 +411,7 @@ def readiness_check() -> dict[str, str]:
     if not settings.supabase_configured:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="Configure SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY in Backend/.env.",
+            detail=settings.supabase_configuration_error,
         )
     return {"status": "ready"}
 
@@ -456,10 +508,15 @@ def read_current_user(
     db: Any = Depends(get_supabase_client),
 ) -> dict[str, Any]:
     profile = get_profile(claims["sub"], db)
+    is_authorized_admin = (
+        get_settings().admin_user_uuid is not None
+        and claims.get("sub") == str(get_settings().admin_user_uuid)
+        and (claims.get("app_metadata") or {}).get("platform_role") == "admin"
+    )
     return {
         "id": claims["sub"],
         "username": profile["username"],
-        "platform_role": (claims.get("app_metadata") or {}).get("platform_role"),
+        "platform_role": "admin" if is_authorized_admin else None,
         "profile": profile,
     }
 
@@ -1147,7 +1204,8 @@ def admin_accounts(
     require_admin(claims)
     query = db.table("profiles").select(
         "id,role,username,full_name,phone,status,status_reason,created_at,"
-        "job_seeker_details(*),institution_details(*),institution_certificates(cert_type)"
+        "job_seeker_details(*),institution_details(*),"
+        "institution_certificates(cert_type)"
     )
     if role:
         query = query.eq("role", role)

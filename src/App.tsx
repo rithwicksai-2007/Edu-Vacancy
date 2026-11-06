@@ -7,6 +7,7 @@ const RoleSelection = lazy(() => import("./frontend/Roleseletion"));
 const InstituteLogin = lazy(() => import("./frontend/college-login"));
 const JobRegistration = lazy(() => import("./frontend/job-registration"));
 const CollegeRegistration = lazy(() => import("./frontend/college-registration"));
+const RegistrationLegalPage = lazy(() => import("./frontend/registration-legal"));
 const JobSeekerDashboard = lazy(() => import("./frontend/jobSeekerDashboard"));
 const InstitutionDashboard = lazy(() => import("./frontend/InstitutionDashboard"));
 const AdminDashboard = lazy(() => import("./frontend/AdminDashboard"));
@@ -31,6 +32,8 @@ function App() {
           <Route path="/college-login" element={<InstituteLogin />} />
           <Route path="/college-registration" element={<CollegeRegistration />} />
           <Route path="/job-registration" element={<JobRegistration />} />
+          <Route path="/terms" element={<RegistrationLegalPage />} />
+          <Route path="/privacy" element={<RegistrationLegalPage />} />
           <Route path="/jobSeekerDashboard" element={<JobSeekerDashboard />} />
           <Route path="/institutionDashboard" element={<InstitutionDashboard />} />
           <Route path="/adminDashboard" element={<AdminDashboard />} />
