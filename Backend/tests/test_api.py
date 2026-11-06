@@ -12,6 +12,7 @@ from pydantic import ValidationError
 
 from Backend.main import (
     app,
+    Settings,
     admin_send_notification,
     admin_overview,
     admin_accounts,
@@ -32,6 +33,13 @@ from Backend.schemas import (
 
 
 class ApiContractTests(unittest.TestCase):
+    @patch.dict("os.environ", {"FRONTEND_ORIGINS": "https://custom.example"})
+    def test_github_pages_origin_is_allowed_alongside_configured_origins(self) -> None:
+        origins = Settings().frontend_origins
+
+        self.assertIn("https://rithwicksai-2007.github.io", origins)
+        self.assertIn("https://custom.example", origins)
+
     def test_job_seeker_registration_requires_ten_digit_phone(self) -> None:
         registration = {
             "username": "sample.user",

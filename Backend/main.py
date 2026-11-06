@@ -46,6 +46,7 @@ load_dotenv(os.path.join(os.path.dirname(__file__), ".env"))
 logger = logging.getLogger(__name__)
 bearer_scheme = HTTPBearer(auto_error=False)
 SYNTHETIC_EMAIL_DOMAIN = "users.eduvacancy.invalid"
+GITHUB_PAGES_ORIGIN = "https://rithwicksai-2007.github.io"
 
 
 def username_auth_email(username: str) -> str:
@@ -67,7 +68,7 @@ class Settings:
         self.admin_user_id = os.getenv("ADMIN_USER_ID", "").strip()
 
         configured_origins = os.getenv("FRONTEND_ORIGINS")
-        self.frontend_origins = (
+        additional_origins = (
             [
                 origin.strip()
                 for origin in configured_origins.split(",")
@@ -75,6 +76,9 @@ class Settings:
             ]
             if configured_origins is not None
             else ["http://localhost:5173", "http://127.0.0.1:5173"]
+        )
+        self.frontend_origins = list(
+            dict.fromkeys([GITHUB_PAGES_ORIGIN, *additional_origins])
         )
 
     @property
