@@ -166,6 +166,9 @@ never trusts a role supplied in editable user metadata.
   run [`Backend/supabase/schema.sql`](./Backend/supabase/schema.sql). This
   creates the `profiles` table and the other database objects required by
   login and the dashboards.
+- If an admin dashboard reports `PGRST200`, run the same schema file in the
+  Supabase SQL Editor to add missing foreign-key relationships and refresh
+  PostgREST's schema cache.
 - The backend also needs `Backend/.env` with `SUPABASE_URL` and
   `SUPABASE_SERVICE_ROLE_KEY`; without these it cannot validate the access
   token or look up the administrator profile. `SUPABASE_URL` must be the same

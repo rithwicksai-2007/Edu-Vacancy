@@ -245,6 +245,17 @@ begin
             add constraint institution_certificates_institution_id_fkey
             foreign key (institution_id) references public.profiles(id) on delete cascade;
     end if;
+    if not exists (
+        select 1 from pg_constraint
+        where conrelid = 'public.institution_documents'::regclass
+          and contype = 'f'
+          and confrelid = 'public.profiles'::regclass
+    ) then
+        alter table public.institution_documents
+            add constraint institution_documents_institution_id_fkey
+            foreign key (institution_id) references public.profiles(id) on delete cascade
+            not valid;
+    end if;
 end;
 $$;
 
@@ -808,3 +819,5 @@ with check (
     bucket_id in ('resumes', 'certificates', 'job-seeker-documents', 'institution-documents')
     and (storage.foldername(name))[1] = auth.uid()::text
 );
+
+notify pgrst, 'reload schema';

@@ -165,7 +165,13 @@ def execute_response(query: Any) -> Any:
                     "for the configured project, then restart the backend."
                 ),
             ) from error
-        if error.code in {"PGRST204", "PGRST205", "42P01", "42703"}:
+        if error.code == "PGRST200":
+            detail = (
+                "Supabase could not resolve a foreign-key relationship required "
+                "by this request. Run Backend/supabase/schema.sql in the Supabase "
+                "SQL Editor to add missing relationships and reload the schema cache."
+            )
+        elif error.code in {"PGRST204", "PGRST205", "42P01", "42703"}:
             detail = (
                 "The Supabase database schema is missing or out of date. "
                 "Run Backend/supabase/schema.sql in the Supabase SQL Editor, "

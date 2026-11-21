@@ -534,6 +534,23 @@ class ApiContractTests(unittest.TestCase):
         self.assertEqual(raised.exception.status_code, 502)
         self.assertIn("Backend/supabase/schema.sql", raised.exception.detail)
 
+    def test_missing_relationship_returns_schema_migration_guidance(self) -> None:
+        class MissingRelationshipQuery:
+            def execute(self) -> None:
+                raise APIError(
+                    {
+                        "code": "PGRST200",
+                        "message": "Could not find a relationship in schema cache.",
+                    }
+                )
+
+        with self.assertRaises(HTTPException) as raised:
+            execute_response(MissingRelationshipQuery())
+
+        self.assertEqual(raised.exception.status_code, 502)
+        self.assertIn("foreign-key relationship", raised.exception.detail)
+        self.assertIn("Backend/supabase/schema.sql", raised.exception.detail)
+
     def test_unregistered_supabase_key_returns_actionable_error(self) -> None:
         class InvalidKeyQuery:
             def execute(self) -> None:
