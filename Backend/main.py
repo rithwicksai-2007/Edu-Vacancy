@@ -151,7 +151,11 @@ def execute_response(query: Any) -> Any:
     try:
         response = query.execute()
     except APIError as error:
-        logger.error("Supabase rejected an API request: %s", error.code)
+        logger.error(
+            "Supabase rejected an API request: code=%s message=%s",
+            error.code,
+            error.message,
+        )
         if error.message and error.message.lower() == "unregistered api key":
             raise HTTPException(
                 status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -167,8 +171,15 @@ def execute_response(query: Any) -> Any:
                 "Run Backend/supabase/schema.sql in the Supabase SQL Editor, "
                 "then try again."
             )
+        elif error.code in {"42501", "PGRST301"}:
+            detail = (
+                "Supabase denied this database request. Verify "
+                "SUPABASE_SERVICE_ROLE_KEY is the service-role or secret key "
+                "for the configured project."
+            )
         else:
-            detail = "The database request failed."
+            code = f" (Supabase error {error.code})" if error.code else ""
+            detail = f"The database request failed{code}. Check the backend service logs."
         raise HTTPException(
             status_code=status.HTTP_502_BAD_GATEWAY,
             detail=detail,

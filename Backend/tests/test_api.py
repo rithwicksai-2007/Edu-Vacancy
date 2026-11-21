@@ -546,6 +546,34 @@ class ApiContractTests(unittest.TestCase):
         self.assertIn("SUPABASE_SERVICE_ROLE_KEY", raised.exception.detail)
         self.assertIn("Backend/.env", raised.exception.detail)
 
+    def test_denied_database_request_returns_server_key_guidance(self) -> None:
+        class DeniedQuery:
+            def execute(self) -> None:
+                raise APIError({"code": "42501", "message": "permission denied"})
+
+        with self.assertRaises(HTTPException) as raised:
+            execute_response(DeniedQuery())
+
+        self.assertEqual(raised.exception.status_code, 502)
+        self.assertIn("SUPABASE_SERVICE_ROLE_KEY", raised.exception.detail)
+
+    def test_unknown_database_error_includes_code_without_database_message(self) -> None:
+        class UnexpectedQuery:
+            def execute(self) -> None:
+                raise APIError(
+                    {
+                        "code": "PGRST116",
+                        "message": "Database detail that should stay in server logs",
+                    }
+                )
+
+        with self.assertRaises(HTTPException) as raised:
+            execute_response(UnexpectedQuery())
+
+        self.assertEqual(raised.exception.status_code, 502)
+        self.assertIn("PGRST116", raised.exception.detail)
+        self.assertNotIn("Database detail", raised.exception.detail)
+
     @patch.dict("os.environ", {"ADMIN_USER_ID": "00000000-0000-0000-0000-000000000001"})
     def test_admin_overview_returns_counts_without_account_update_payload(self) -> None:
         get_settings.cache_clear()
