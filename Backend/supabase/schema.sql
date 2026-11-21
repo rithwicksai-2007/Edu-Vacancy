@@ -182,9 +182,36 @@ create table if not exists public.institution_documents (
     storage_path text not null,
     original_file_name text not null,
     content_type text not null,
-    file_size bigint not null check (file_size > 0),
+    file_size bigint not null,
+    constraint institution_documents_file_size_limit
+        check (file_size > 0 and file_size <= 5242880),
+    constraint institution_documents_content_type_check
+        check (content_type in ('image/jpeg', 'image/png')),
     created_at timestamptz not null default now()
 );
+
+do $$
+begin
+    if not exists (
+        select 1 from pg_constraint
+        where conname = 'institution_documents_file_size_limit'
+          and conrelid = 'public.institution_documents'::regclass
+    ) then
+        alter table public.institution_documents
+            add constraint institution_documents_file_size_limit
+            check (file_size > 0 and file_size <= 5242880) not valid;
+    end if;
+    if not exists (
+        select 1 from pg_constraint
+        where conname = 'institution_documents_content_type_check'
+          and conrelid = 'public.institution_documents'::regclass
+    ) then
+        alter table public.institution_documents
+            add constraint institution_documents_content_type_check
+            check (content_type in ('image/jpeg', 'image/png')) not valid;
+    end if;
+end;
+$$;
 
 do $$
 begin

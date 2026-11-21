@@ -7,7 +7,7 @@ import React, {
 } from "react";
 import { Link } from "react-router-dom";
 import { getSupabaseClient, usernameAuthEmail } from "../lib/supabase-config";
-import { apiPublicRequest } from "../lib/api-config";
+import { apiPublicRequest, apiRequest } from "../lib/api-config";
 import { getAuthErrorMessage } from "../lib/auth-error";
 import { useAppDialog } from "../components/AppDialogContext";
 import {
@@ -198,6 +198,7 @@ export default function CollegeRegistration() {
   const [currentStep, setCurrentStep] = useState(1);
   const [showPassword, setShowPassword] = useState(false);
   const [institutionImages, setInstitutionImages] = useState<File[]>([]);
+  const [pendingPhotoUploadToken, setPendingPhotoUploadToken] = useState<string | null>(null);
   const [termsAccepted, setTermsAccepted] = useState(false);
   const [legalDocument, setLegalDocument] =
     useState<RegistrationLegalDocument | null>(null);
@@ -490,9 +491,20 @@ export default function CollegeRegistration() {
     const files = Array.from(e.target.files ?? []);
     const validTypes = ["image/jpeg", "image/png"];
     const validExtension = /\.(jpe?g|png)$/i;
+    const newFiles = files.filter(
+      (file) =>
+        !institutionImages.some(
+          (existing) =>
+            existing.name === file.name &&
+            existing.size === file.size &&
+            existing.lastModified === file.lastModified,
+        ),
+    );
 
-    if (files.length > 5) {
-      setError("Upload no more than 5 institution photos.");
+    if (institutionImages.length + newFiles.length > 5) {
+      setError(
+        `You can upload up to 5 photos total. ${institutionImages.length} are already selected.`,
+      );
       e.target.value = "";
       return;
     }
@@ -511,13 +523,63 @@ export default function CollegeRegistration() {
       return;
     }
 
-    setInstitutionImages(files);
+    setInstitutionImages((previous) => [...previous, ...newFiles]);
     e.target.value = "";
     setMessage("");
   };
 
+  const uploadInstitutionPhotos = async (accessToken: string) => {
+    const body = new FormData();
+    institutionImages.forEach((image) => body.append("files", image));
+    const result = await apiRequest<{ uploaded_count: number }>(
+      accessToken,
+      "/api/v1/institutions/me/documents",
+      { method: "POST", body },
+    );
+    if (result.uploaded_count !== institutionImages.length) {
+      throw new Error("The server did not confirm that all selected photos were saved.");
+    }
+  };
+
+  const retryInstitutionPhotoUpload = async () => {
+    if (!pendingPhotoUploadToken) return;
+    setLoading(true);
+    setMessage("");
+
+    try {
+      await uploadInstitutionPhotos(pendingPhotoUploadToken);
+      setPendingPhotoUploadToken(null);
+      setMessageType("success");
+      setMessage("Your photos are saved and your institution is ready for review.");
+      await showAlert("Your photos are saved and your institution is ready for review.");
+      setForm(initialForm);
+      setInstitutionImages([]);
+      setTermsAccepted(false);
+      setCurrentStep(1);
+      setShowPassword(false);
+      if (institutionImagesInputRef.current) {
+        institutionImagesInputRef.current.value = "";
+      }
+    } catch (error: unknown) {
+      const uploadError =
+        error instanceof Error ? error.message : "Unable to save the photos.";
+      setMessageType("error");
+      setMessage(`Your account already exists, but the photos were not saved: ${uploadError}`);
+      await showAlert(
+        `Your account already exists, but the photos were not saved.\n${uploadError}\nYou can retry without registering again.`,
+      );
+    } finally {
+      setLoading(false);
+    }
+  };
+
   const handleSubmit = async (e: FormEvent<HTMLFormElement>) => {
     e.preventDefault();
+
+    if (pendingPhotoUploadToken) {
+      await retryInstitutionPhotoUpload();
+      return;
+    }
 
     if (!validateStep3()) return;
 
@@ -574,79 +636,33 @@ export default function CollegeRegistration() {
       if (!data.session) {
         throw new Error("The account was created, but a login session was not returned. Sign in with your username and password.");
       }
-      const userId = account.id;
-
-      let photoUploadWarning = false;
-      const uploadedPaths: string[] = [];
-      const documentRows: {
-        institution_id: string;
-        document_type: "institution_image";
-        storage_path: string;
-        original_file_name: string;
-        content_type: string;
-        file_size: number;
-      }[] = [];
-      const supabaseClient = getSupabaseClient();
-      for (const image of institutionImages) {
-        const safeFileName = image.name.replace(/[^a-zA-Z0-9._-]/g, "_");
-        const path = `${userId}/${crypto.randomUUID()}-${safeFileName}`;
-        const { error: uploadError } = await supabaseClient.storage
-          .from("institution-documents")
-          .upload(path, image, { contentType: image.type, upsert: false });
-
-        if (uploadError) {
-          photoUploadWarning = true;
-          break;
-        }
-
-        uploadedPaths.push(path);
-        documentRows.push({
-          institution_id: userId,
-          document_type: "institution_image",
-          storage_path: path,
-          original_file_name: image.name,
-          content_type: image.type,
-          file_size: image.size,
-        });
-      }
-
-      if (photoUploadWarning && uploadedPaths.length) {
-        const { error: cleanupError } = await supabaseClient.storage
-          .from("institution-documents")
-          .remove(uploadedPaths);
-        if (cleanupError) {
-          console.error("Could not clean up partially uploaded institution photos.", cleanupError);
-        }
-      } else if (uploadedPaths.length) {
-        const { error: photoRecordError } = await supabaseClient
-          .from("institution_documents")
-          .insert(documentRows);
-
-        if (photoRecordError) {
-          const { error: cleanupError } = await supabaseClient.storage
-            .from("institution-documents")
-            .remove(uploadedPaths);
-          if (cleanupError) {
-            console.error("Could not clean up institution photos after metadata failed.", cleanupError);
-          }
-          photoUploadWarning = true;
-        }
+      try {
+        await uploadInstitutionPhotos(data.session.access_token);
+      } catch (error: unknown) {
+        const uploadError =
+          error instanceof Error ? error.message : "Unable to save the photos.";
+        setPendingPhotoUploadToken(data.session.access_token);
+        setMessageType("error");
+        setMessage(
+          `Your account was created, but the photos were not saved: ${uploadError}. Retry the photo upload below; do not register again.`,
+        );
+        await showAlert(
+          `Your account was created, but the photos were not saved.\n${uploadError}\nRetry the photo upload without registering again.`,
+        );
+        return;
       }
 
       setMessageType("success");
       setMessage(
-        photoUploadWarning
-          ? "Registration submitted successfully, but one or more institution photos could not be uploaded. Your institution will be reviewed before verification."
-          : "Registration submitted successfully. You can now log in with your username. Your institution will be reviewed before verification."
+        "Registration submitted successfully. Your institution will be reviewed before verification."
       );
       await showAlert(
-        photoUploadWarning
-          ? "Registration successful, but one or more institution photos could not be uploaded. Your institution will be reviewed before verification."
-          : "Registration successful. You can now log in with your username. Your institution will be reviewed before verification.",
+        "Registration successful. You can now log in with your username. Your institution will be reviewed before verification.",
       );
 
       setForm(initialForm);
       setInstitutionImages([]);
+      setPendingPhotoUploadToken(null);
       setTermsAccepted(false);
       setCurrentStep(1);
       setShowPassword(false);
@@ -1255,7 +1271,7 @@ export default function CollegeRegistration() {
                     </span>
                     <span className="max-w-full break-all text-sm font-semibold">
                       {institutionImages.length
-                        ? `${institutionImages.length} photo${institutionImages.length === 1 ? "" : "s"} selected`
+                        ? `${institutionImages.length} of 5 photos selected`
                         : "Upload at least one clear photo of your school or college"}
                     </span>
                     <span className="mt-1 text-xs">
@@ -1270,6 +1286,7 @@ export default function CollegeRegistration() {
                     id="institutionImages"
                     accept="image/jpeg,image/png"
                     multiple
+                    disabled={loading || Boolean(pendingPhotoUploadToken)}
                     onChange={handleInstitutionImages}
                   />
 
@@ -1283,7 +1300,13 @@ export default function CollegeRegistration() {
                     </ul>
                   )}
 
-                  {institutionImages.length > 0 && (
+                  {pendingPhotoUploadToken ? (
+                    <p className="mt-3 rounded-lg bg-amber-50 p-3 text-xs leading-5 text-amber-800">
+                      Your account already exists. Retry saving these photos below; do not submit another registration.
+                    </p>
+                  ) : null}
+
+                  {institutionImages.length > 0 && !pendingPhotoUploadToken && (
                     <button
                       type="button"
                       onClick={() => {
@@ -1331,20 +1354,24 @@ export default function CollegeRegistration() {
                 </div>
 
                 <div className="mt-6 flex flex-col gap-3 sm:flex-row">
-                  <button
-                    type="button"
-                    className={buttonOutline}
-                    disabled={loading}
-                    onClick={() => goToStep(2)}
-                  >
-                    ← Back
-                  </button>
+                  {!pendingPhotoUploadToken && (
+                    <button
+                      type="button"
+                      className={buttonOutline}
+                      disabled={loading}
+                      onClick={() => goToStep(2)}
+                    >
+                      ← Back
+                    </button>
+                  )}
                   <button
                     type="submit"
                     className={buttonPrimary}
                     disabled={loading}
                   >
-                    {loading ? "Submitting..." : "Submit for Review"}
+                    {loading
+                      ? pendingPhotoUploadToken ? "Saving photos..." : "Submitting..."
+                      : pendingPhotoUploadToken ? "Retry photo upload" : "Submit for Review"}
                   </button>
                 </div>
               </div>

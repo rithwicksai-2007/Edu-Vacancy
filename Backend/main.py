@@ -2,16 +2,17 @@ import csv
 import io
 import logging
 import os
+import re
 from datetime import datetime, timezone
 from functools import lru_cache
 from typing import Any
 from urllib.parse import urlparse
-from uuid import UUID
+from uuid import UUID, uuid4
 
 import httpx
 import jwt
 from dotenv import load_dotenv
-from fastapi import Depends, FastAPI, HTTPException, Query, status
+from fastapi import Depends, FastAPI, File, HTTPException, Query, UploadFile, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
@@ -47,6 +48,9 @@ logger = logging.getLogger(__name__)
 bearer_scheme = HTTPBearer(auto_error=False)
 SYNTHETIC_EMAIL_DOMAIN = "users.eduvacancy.invalid"
 GITHUB_PAGES_ORIGIN = "https://rithwicksai-2007.github.io"
+INSTITUTION_IMAGE_BUCKET = "institution-documents"
+MAX_INSTITUTION_IMAGE_SIZE = 5 * 1024 * 1024
+MAX_INSTITUTION_IMAGES = 5
 
 
 def username_auth_email(username: str) -> str:
@@ -504,6 +508,119 @@ def register_institution(
         metadata,
         db,
     )
+
+
+@app.post(
+    "/api/v1/institutions/me/documents",
+    status_code=status.HTTP_201_CREATED,
+    tags=["institutions"],
+)
+def upload_institution_documents(
+    files: list[UploadFile] = File(...),
+    claims: dict[str, Any] = Depends(get_user_claims),
+    db: Any = Depends(get_supabase_client),
+) -> dict[str, int]:
+    profile = require_profile_role(claims, db, "institution")
+    if not files or len(files) > MAX_INSTITUTION_IMAGES:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=f"Upload between 1 and {MAX_INSTITUTION_IMAGES} institution photos.",
+        )
+
+    image_data: list[tuple[str, str, str, bytes]] = []
+    for uploaded_file in files:
+        original_name = (
+            (uploaded_file.filename or "")
+            .replace("\\", "/")
+            .rsplit("/", 1)[-1]
+        )
+        extension = os.path.splitext(original_name)[1].lower()
+        content_type = uploaded_file.content_type
+        content = uploaded_file.file.read(MAX_INSTITUTION_IMAGE_SIZE + 1)
+
+        if not original_name or len(content) > MAX_INSTITUTION_IMAGE_SIZE:
+            raise HTTPException(
+                status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+                detail="Each institution photo must have a filename and be no larger than 5 MB.",
+            )
+        is_jpeg = (
+            extension in {".jpg", ".jpeg"}
+            and content_type == "image/jpeg"
+            and content.startswith(b"\xff\xd8\xff")
+        )
+        is_png = (
+            extension == ".png"
+            and content_type == "image/png"
+            and content.startswith(b"\x89PNG\r\n\x1a\n")
+        )
+        if not (is_jpeg or is_png):
+            raise HTTPException(
+                status_code=status.HTTP_415_UNSUPPORTED_MEDIA_TYPE,
+                detail="Institution photos must be valid JPG or PNG images.",
+            )
+
+        safe_name = re.sub(r"[^a-zA-Z0-9._-]", "_", original_name)[:180]
+        image_data.append((original_name, safe_name, content_type, content))
+
+    institution_id = profile["id"]
+    uploaded_paths: list[str] = []
+    document_rows: list[dict[str, Any]] = []
+
+    def clean_up_uploaded_files() -> None:
+        if not uploaded_paths:
+            return
+        try:
+            db.storage.from_(INSTITUTION_IMAGE_BUCKET).remove(uploaded_paths)
+        except (StorageApiError, httpx.HTTPError) as error:
+            logger.error(
+                "Could not clean up institution photos after a failed upload: %s",
+                type(error).__name__,
+            )
+
+    try:
+        for original_name, safe_name, content_type, content in image_data:
+            storage_path = f"{institution_id}/{uuid4().hex}-{safe_name}"
+            db.storage.from_(INSTITUTION_IMAGE_BUCKET).upload(
+                storage_path,
+                content,
+                {"content-type": content_type, "upsert": "false"},
+            )
+            uploaded_paths.append(storage_path)
+            document_rows.append(
+                {
+                    "institution_id": institution_id,
+                    "document_type": "institution_image",
+                    "storage_path": storage_path,
+                    "original_file_name": original_name,
+                    "content_type": content_type,
+                    "file_size": len(content),
+                }
+            )
+
+        execute_response(
+            db.table("institution_documents").insert(document_rows)
+        )
+    except StorageApiError as error:
+        clean_up_uploaded_files()
+        logger.error("Supabase Storage rejected institution photos: %s", error.code)
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail="Unable to store institution photos. Please try again.",
+        ) from error
+    except httpx.HTTPError as error:
+        clean_up_uploaded_files()
+        logger.error(
+            "Supabase Storage could not be reached: %s", type(error).__name__
+        )
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="The photo storage service is temporarily unavailable.",
+        ) from error
+    except HTTPException:
+        clean_up_uploaded_files()
+        raise
+
+    return {"uploaded_count": len(document_rows)}
 
 
 @app.get("/api/v1/auth/me", tags=["authentication"])
@@ -1209,7 +1326,8 @@ def admin_accounts(
     query = db.table("profiles").select(
         "id,role,username,full_name,phone,status,status_reason,created_at,"
         "job_seeker_details(*),institution_details(*),"
-        "institution_certificates(cert_type)"
+        "institution_certificates(id,cert_type),"
+        "institution_documents(id,document_type,original_file_name,content_type)"
     )
     if role:
         query = query.eq("role", role)
@@ -1278,20 +1396,38 @@ def admin_account_documents(
     if profile is None:
         raise HTTPException(status_code=404, detail="Account not found.")
 
-    documents: list[tuple[str, str, str]] = []
+    documents: list[tuple[str, str, str, str, str]] = []
     if profile["role"] == "institution":
         certificates = execute(
             db.table("institution_certificates")
-            .select("file_url,cert_type")
+            .select("id,file_url,cert_type")
             .eq("institution_id", str(account_id))
         )
         documents.extend(
             (
+                str(item["id"]),
                 "certificates",
                 item["file_url"],
                 item["cert_type"].replace("_", " ").title(),
+                "",
             )
             for item in certificates
+        )
+        institution_images = execute(
+            db.table("institution_documents")
+            .select("id,storage_path,original_file_name,content_type")
+            .eq("institution_id", str(account_id))
+            .order("created_at")
+        )
+        documents.extend(
+            (
+                str(item["id"]),
+                INSTITUTION_IMAGE_BUCKET,
+                item["storage_path"],
+                f"Institution photo: {item['original_file_name']}",
+                item["content_type"],
+            )
+            for item in institution_images
         )
     elif profile["role"] == "job_seeker":
         details = first_row(
@@ -1300,10 +1436,10 @@ def admin_account_documents(
             .eq("id", str(account_id))
         )
         if details and details.get("resume_url"):
-            documents.append(("resumes", details["resume_url"], "Resume"))
+            documents.append(("resume", "resumes", details["resume_url"], "Resume", ""))
 
     signed_documents = []
-    for bucket, path, name in documents:
+    for document_id, bucket, path, name, content_type in documents:
         try:
             signed = db.storage.from_(bucket).create_signed_url(path, 300)
         except StorageApiError as error:
@@ -1319,7 +1455,13 @@ def admin_account_documents(
                 detail="The document service did not return a secure link.",
             )
         signed_documents.append(
-            {"name": name, "url": signed_url, "expires_in": 300}
+            {
+                "id": document_id,
+                "name": name,
+                "url": signed_url,
+                "expires_in": 300,
+                "content_type": content_type,
+            }
         )
     return signed_documents
 

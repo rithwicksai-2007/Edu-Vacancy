@@ -91,6 +91,7 @@ Authenticated API requests must send
 - `/api/v1/connections/*` and `/api/v1/complaints/*` for platform interactions
 - `/api/v1/saved-vacancies/*` and `/api/v1/saved-teachers/*` for saved items
 - `/api/v1/notifications/*` for the signed-in user's in-app inbox
+- `/api/v1/institutions/me/documents` for private institution photo uploads
 - `/api/v1/admin/*` for protected moderation, reporting, and audit history
 
 The job-seeker and institution dashboards load profiles, vacancies, candidates,
@@ -99,8 +100,11 @@ Registration creates a Supabase Auth account through the backend and the
 database trigger creates its profile/detail rows. Jobseeker profile photos and
 resumes are stored in the private job-seeker document bucket and recorded in
 `job_seeker_documents`; institution photos are stored in a separate private
-bucket and recorded in `institution_documents`. Profile and institution text
-details are stored in their respective detail tables.
+`institution-documents` bucket and recorded as one row per photo in
+`institution_documents`. Uploads are validated and saved by the FastAPI service
+(including on Render), and the admin review API returns short-lived signed
+image URLs for in-page previews. Profile and institution text details are
+stored in their respective detail tables.
 
 ### Username accounts
 

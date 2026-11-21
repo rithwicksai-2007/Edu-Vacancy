@@ -1,7 +1,9 @@
 import asyncio
 import unittest
 import time
+from io import BytesIO
 from unittest.mock import patch
+from uuid import UUID
 
 import httpx
 import jwt
@@ -16,6 +18,7 @@ from Backend.main import (
     admin_send_notification,
     admin_overview,
     admin_accounts,
+    admin_account_documents,
     admin_vacancies,
     create_username_account,
     execute_response,
@@ -23,6 +26,7 @@ from Backend.main import (
     get_user_claims,
     read_current_user,
     require_admin,
+    upload_institution_documents,
     username_auth_email,
 )
 from Backend.schemas import (
@@ -82,7 +86,7 @@ class ApiContractTests(unittest.TestCase):
                 InstitutionRegistration(**registration, phone=phone)
 
     @patch.dict("os.environ", {"ADMIN_USER_ID": "00000000-0000-0000-0000-000000000001"})
-    def test_admin_accounts_query_does_not_depend_on_optional_document_tables(self) -> None:
+    def test_admin_accounts_query_includes_institution_photo_metadata(self) -> None:
         get_settings.cache_clear()
         self.addCleanup(get_settings.cache_clear)
 
@@ -127,8 +131,207 @@ class ApiContractTests(unittest.TestCase):
 
         self.assertEqual(accounts, [])
         self.assertIn("institution_certificates", query.selected_columns)
+        self.assertIn("institution_documents", query.selected_columns)
         self.assertNotIn("job_seeker_documents", query.selected_columns)
-        self.assertNotIn("institution_documents", query.selected_columns)
+
+    def test_institution_photo_upload_stores_each_file_and_metadata_separately(self) -> None:
+        image_bytes = b"\x89PNG\r\n\x1a\nsample-image"
+        inserted_rows: list[dict[str, object]] = []
+        stored_files: list[tuple[str, bytes, dict[str, str]]] = []
+
+        class Query:
+            def __init__(self, table_name: str) -> None:
+                self.table_name = table_name
+
+            def select(self, *_args: object) -> "Query":
+                return self
+
+            def eq(self, *_args: object) -> "Query":
+                return self
+
+            def limit(self, *_args: object) -> "Query":
+                return self
+
+            def insert(self, rows: list[dict[str, object]]) -> "Query":
+                inserted_rows.extend(rows)
+                return self
+
+            def execute(self) -> object:
+                data = (
+                    [{"id": "institution-id", "role": "institution", "status": "Pending"}]
+                    if self.table_name == "profiles"
+                    else inserted_rows
+                )
+                return type("Response", (), {"data": data})()
+
+        class Bucket:
+            def upload(
+                self, path: str, content: bytes, options: dict[str, str]
+            ) -> None:
+                stored_files.append((path, content, options))
+
+            def remove(self, _paths: list[str]) -> None:
+                return None
+
+        class Storage:
+            def from_(self, _bucket: str) -> Bucket:
+                return Bucket()
+
+        class Database:
+            storage = Storage()
+
+            def table(self, name: str) -> Query:
+                return Query(name)
+
+        uploaded_file = type(
+            "UploadedFile",
+            (),
+            {
+                "filename": "campus.png",
+                "content_type": "image/png",
+                "file": BytesIO(image_bytes),
+            },
+        )()
+        result = upload_institution_documents(
+            files=[uploaded_file],
+            claims={"sub": "institution-id"},
+            db=Database(),
+        )
+
+        self.assertEqual(result, {"uploaded_count": 1})
+        self.assertEqual(len(stored_files), 1)
+        self.assertEqual(stored_files[0][1], image_bytes)
+        self.assertEqual(len(inserted_rows), 1)
+        self.assertEqual(inserted_rows[0]["institution_id"], "institution-id")
+        self.assertEqual(inserted_rows[0]["document_type"], "institution_image")
+        self.assertEqual(inserted_rows[0]["file_size"], len(image_bytes))
+
+    def test_institution_photo_upload_rejects_more_than_five_files(self) -> None:
+        class Query:
+            def select(self, *_args: object) -> "Query":
+                return self
+
+            def eq(self, *_args: object) -> "Query":
+                return self
+
+            def limit(self, *_args: object) -> "Query":
+                return self
+
+            def execute(self) -> object:
+                return type(
+                    "Response",
+                    (),
+                    {"data": [{"id": "institution-id", "role": "institution", "status": "Pending"}]},
+                )()
+
+        class Database:
+            def table(self, _name: str) -> Query:
+                return Query()
+
+        files = [
+            type(
+                "UploadedFile",
+                (),
+                {
+                    "filename": f"campus-{index}.png",
+                    "content_type": "image/png",
+                    "file": BytesIO(b""),
+                },
+            )()
+            for index in range(6)
+        ]
+        with self.assertRaises(HTTPException) as raised:
+            upload_institution_documents(
+                files=files,
+                claims={"sub": "institution-id"},
+                db=Database(),
+            )
+
+        self.assertEqual(raised.exception.status_code, 422)
+
+    @patch.dict("os.environ", {"ADMIN_USER_ID": "00000000-0000-0000-0000-000000000001"})
+    def test_admin_document_api_returns_signed_institution_photo(self) -> None:
+        get_settings.cache_clear()
+        self.addCleanup(get_settings.cache_clear)
+
+        class Query:
+            def __init__(self, table_name: str) -> None:
+                self.table_name = table_name
+
+            def select(self, *_args: object) -> "Query":
+                return self
+
+            def eq(self, *_args: object) -> "Query":
+                return self
+
+            def order(self, *_args: object, **_kwargs: object) -> "Query":
+                return self
+
+            def limit(self, *_args: object) -> "Query":
+                return self
+
+            def execute(self) -> object:
+                rows = {
+                    "profiles": [
+                        {"id": "00000000-0000-0000-0000-000000000002", "role": "institution"}
+                    ],
+                    "institution_certificates": [],
+                    "institution_documents": [
+                        {
+                            "id": "photo-id",
+                            "storage_path": "institution-id/photo.png",
+                            "original_file_name": "campus.png",
+                            "content_type": "image/png",
+                        }
+                    ],
+                }
+                return type("Response", (), {"data": rows[self.table_name]})()
+
+        signed_paths: list[tuple[str, str, int]] = []
+
+        class Bucket:
+            def __init__(self, bucket_name: str) -> None:
+                self.bucket_name = bucket_name
+
+            def create_signed_url(self, path: str, expires_in: int) -> dict[str, str]:
+                signed_paths.append((self.bucket_name, path, expires_in))
+                return {"signedURL": "https://storage.example/signed-photo"}
+
+        class Storage:
+            def from_(self, bucket_name: str) -> Bucket:
+                return Bucket(bucket_name)
+
+        class Database:
+            storage = Storage()
+
+            def table(self, name: str) -> Query:
+                return Query(name)
+
+        result = admin_account_documents(
+            account_id=UUID("00000000-0000-0000-0000-000000000002"),
+            claims={
+                "sub": "00000000-0000-0000-0000-000000000001",
+                "app_metadata": {"platform_role": "admin"},
+            },
+            db=Database(),
+        )
+
+        self.assertEqual(
+            result,
+            [
+                {
+                    "id": "photo-id",
+                    "name": "Institution photo: campus.png",
+                    "url": "https://storage.example/signed-photo",
+                    "expires_in": 300,
+                    "content_type": "image/png",
+                }
+            ],
+        )
+        self.assertEqual(
+            signed_paths,
+            [("institution-documents", "institution-id/photo.png", 300)],
+        )
 
     def test_username_login_address_uses_private_synthetic_domain(self) -> None:
         self.assertEqual(

@@ -30,9 +30,24 @@ type Account = {
   organization: string;
   date: string;
   status: Status;
-  documents: string[];
+  documents: AccountEvidence[];
   reason?: string;
 };
+
+type AccountEvidence = {
+  id: string;
+  name: string;
+  content_type?: string;
+};
+
+type SignedEvidence = AccountEvidence & {
+  url: string;
+  expires_in: number;
+};
+
+type EvidenceLoadState =
+  | { accountId: string; status: "loaded"; documents: SignedEvidence[] }
+  | { accountId: string; status: "error"; message: string };
 
 type Vacancy = {
   id: string;
@@ -77,9 +92,14 @@ type AccountRecord = {
   created_at: string;
   job_seeker_details: { subject?: string; resume_url?: string | null } | null;
   institution_details: { institution_name?: string } | null;
-  institution_certificates: { cert_type: string }[];
+  institution_certificates: { id: string; cert_type: string }[];
+  institution_documents?: {
+    id: string;
+    document_type: string;
+    original_file_name: string;
+    content_type: string;
+  }[];
   job_seeker_documents?: { document_type: string }[];
-  institution_documents?: { document_type: string }[];
 };
 
 type VacancyRecord = {
@@ -160,25 +180,32 @@ function mapAdminData(
       status: account.status,
       documents: [
         ...(account.institution_certificates ?? []).map((file) =>
-          file.cert_type
-            .split("_")
-            .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
-            .join(" "),
+          ({
+            id: file.id,
+            name: file.cert_type
+              .split("_")
+              .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+              .join(" "),
+          }),
         ),
         ...(account.institution_documents ?? []).map((file) =>
-          file.document_type
-            .split("_")
-            .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
-            .join(" "),
+          ({
+            id: file.id,
+            name: `Institution photo: ${file.original_file_name}`,
+            content_type: file.content_type,
+          }),
         ),
         ...(account.job_seeker_documents ?? []).map((file) =>
-          file.document_type === "profile_photo" ? "Profile Photo" : "Resume",
+          ({
+            id: file.document_type,
+            name: file.document_type === "profile_photo" ? "Profile Photo" : "Resume",
+          }),
         ),
         ...(account.job_seeker_details?.resume_url &&
         !account.job_seeker_documents?.some(
           (file) => file.document_type === "resume",
         )
-          ? ["Resume"]
+          ? [{ id: "resume", name: "Resume" }]
           : []),
       ],
       reason: account.status_reason ?? undefined,
@@ -388,6 +415,8 @@ export default function AdminDashboard() {
   const [filterStatus, setFilterStatus] = useState("All");
   const [filterRole, setFilterRole] = useState("All");
   const [selected, setSelected] = useState<Account | null>(null);
+  const [evidenceLoadState, setEvidenceLoadState] =
+    useState<EvidenceLoadState | null>(null);
   const [rejectReason, setRejectReason] = useState("");
   const [rejectTarget, setRejectTarget] = useState<Account | null>(null);
   const [notificationTitle, setNotificationTitle] = useState("");
@@ -525,6 +554,47 @@ export default function AdminDashboard() {
       window.clearInterval(intervalId);
     };
   }, [accessToken, activePage, vacancyRefreshAttempt]);
+
+  useEffect(() => {
+    const accountId = selected?.id;
+    if (!accountId || !accessToken) return;
+
+    let mounted = true;
+    apiRequest<SignedEvidence[]>(
+      accessToken,
+      `/api/v1/admin/accounts/${accountId}/documents`,
+    )
+      .then((documents) => {
+        if (mounted) {
+          setEvidenceLoadState({ accountId, status: "loaded", documents });
+        }
+      })
+      .catch((error: unknown) => {
+        if (mounted) {
+          setEvidenceLoadState({
+            accountId,
+            status: "error",
+            message:
+              error instanceof Error ? error.message : "Unable to load submitted evidence.",
+          });
+        }
+      })
+
+    return () => {
+      mounted = false;
+    };
+  }, [accessToken, selected?.id]);
+
+  const currentEvidenceState =
+    evidenceLoadState?.accountId === selected?.id ? evidenceLoadState : null;
+  const evidence =
+    currentEvidenceState?.status === "loaded"
+      ? currentEvidenceState.documents
+      : [];
+  const evidenceLoading =
+    selected !== null && accessToken !== "" && currentEvidenceState === null;
+  const evidenceError =
+    currentEvidenceState?.status === "error" ? currentEvidenceState.message : "";
 
   const performAdminAction = async (
     action: () => Promise<unknown>,
@@ -701,27 +771,19 @@ export default function AdminDashboard() {
     }
   };
 
-  const openEvidence = async (accountId: string, documentName: string) => {
-    if (!accessToken) return;
-    try {
-      const documents = await apiRequest<
-        { name: string; url: string; expires_in: number }[]
-      >(accessToken, `/api/v1/admin/accounts/${accountId}/documents`);
-      const selectedDocument = documents.find((item) => item.name === documentName);
-      if (!selectedDocument) {
-        notify("A secure link is not available for this document.");
-        return;
-      }
-      const link = window.document.createElement("a");
-      link.href = selectedDocument.url;
-      link.target = "_blank";
-      link.rel = "noopener noreferrer";
-      window.document.body.appendChild(link);
-      link.click();
-      link.remove();
-    } catch (error: unknown) {
-      notify(error instanceof Error ? error.message : "Unable to open the document.");
+  const openEvidence = (documentId: string) => {
+    const selectedDocument = evidence.find((item) => item.id === documentId);
+    if (!selectedDocument) {
+      notify("A secure link is not available for this document.");
+      return;
     }
+    const link = window.document.createElement("a");
+    link.href = selectedDocument.url;
+    link.target = "_blank";
+    link.rel = "noopener noreferrer";
+    window.document.body.appendChild(link);
+    link.click();
+    link.remove();
   };
 
   const signOut = async () => {
@@ -1477,12 +1539,12 @@ export default function AdminDashboard() {
                 </div>
                 {selected.documents.length ? (
                   <div className="space-y-2">
-                    {selected.documents.map(document => (
-                      <div key={document} className="flex items-center gap-3 rounded-xl border border-slate-200 p-3">
+                    {selected.documents.map((document) => (
+                      <div key={document.id} className="flex items-center gap-3 rounded-xl border border-slate-200 p-3">
                         <FileCheck size={19} className="shrink-0 text-violet-600" />
-                        <span className="flex-1 text-sm">{document}</span>
+                        <span className="flex-1 break-all text-sm">{document.name}</span>
                         <button
-                          onClick={() => void openEvidence(selected.id, document)}
+                          onClick={() => openEvidence(document.id)}
                           className="text-xs font-semibold text-violet-700 hover:underline"
                         >
                           Open securely
@@ -1492,6 +1554,51 @@ export default function AdminDashboard() {
                     <p className="text-xs leading-5 text-amber-700">
                       Private files are opened with short-lived links after the administrator is authorized.
                     </p>
+                    {evidenceLoading && (
+                      <p className="text-sm text-slate-500">Loading secure previews…</p>
+                    )}
+                    {evidenceError && (
+                      <p role="alert" className="rounded-lg bg-rose-50 p-3 text-sm text-rose-700">
+                        {evidenceError}
+                      </p>
+                    )}
+                    {selected.role === "Institution" &&
+                      evidence.some((item) => item.content_type?.startsWith("image/")) && (
+                        <div className="mt-4">
+                          <p className="mb-2 text-sm font-semibold">Institution photos</p>
+                          <div className="grid gap-3 sm:grid-cols-2">
+                            {evidence
+                              .filter((item) => item.content_type?.startsWith("image/"))
+                              .map((item) => (
+                                <a
+                                  key={item.id}
+                                  href={item.url}
+                                  target="_blank"
+                                  rel="noopener noreferrer"
+                                  className="overflow-hidden rounded-xl border border-slate-200 bg-slate-50"
+                                >
+                                  <img
+                                    src={item.url}
+                                    alt={item.name}
+                                    loading="lazy"
+                                    className="h-48 w-full object-cover"
+                                  />
+                                  <span className="block break-all px-3 py-2 text-xs text-slate-600">
+                                    {item.name}
+                                  </span>
+                                </a>
+                              ))}
+                          </div>
+                        </div>
+                      )}
+                  </div>
+                ) : evidenceLoading ? (
+                  <p className="rounded-xl border border-slate-200 p-4 text-sm text-slate-500">
+                    Loading submitted evidence…
+                  </p>
+                ) : evidenceError ? (
+                  <div role="alert" className="rounded-xl border border-rose-200 bg-rose-50 p-4 text-sm text-rose-700">
+                    {evidenceError}
                   </div>
                 ) : (
                   <div className="rounded-xl border border-dashed border-rose-300 bg-rose-50 p-4 text-sm text-rose-700">
