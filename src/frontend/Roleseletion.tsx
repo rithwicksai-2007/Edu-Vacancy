@@ -101,7 +101,7 @@ export default function RoleSelection() {
 
           {/* Heading */}
           <h1 className="mt-5 text-[26px] font-bold text-[#1e293b] sm:mt-6 sm:text-[30px] md:mt-[25px] md:text-[42px] min-[1700px]:text-[60px]">
-            Welcome
+            Hello, vanakum
           </h1>
 
           <p className="mx-auto mb-[35px] mt-[15px] max-w-[600px] text-[15px] leading-[1.8] text-[#64748b] md:mb-[50px] md:text-[18px] min-[1700px]:text-2xl">
