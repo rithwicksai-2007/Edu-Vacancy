@@ -820,4 +820,182 @@ with check (
     and (storage.foldername(name))[1] = auth.uid()::text
 );
 
+-- Normalize foreign-key names and repair existing databases that were created
+-- before all of these relationships were present. PostgREST uses these names
+-- for explicit relationship resolution in embedded selects.
+do $$
+declare
+    existing_constraint text;
+begin
+    if to_regclass('public.vacancies') is not null then
+        select c.conname into existing_constraint
+        from pg_constraint c
+        join pg_attribute a
+          on a.attrelid = c.conrelid
+         and a.attnum = c.conkey[1]
+        where c.conrelid = 'public.vacancies'::regclass
+          and c.contype = 'f'
+          and a.attname = 'institution_id'
+          and c.confrelid = 'public.profiles'::regclass
+        limit 1;
+        if existing_constraint is null then
+            alter table public.vacancies
+                add constraint vacancies_institution_id_fkey
+                foreign key (institution_id) references public.profiles(id) on delete cascade;
+        elsif existing_constraint <> 'vacancies_institution_id_fkey' then
+            execute format(
+                'alter table public.vacancies rename constraint %I to vacancies_institution_id_fkey',
+                existing_constraint
+            );
+        end if;
+
+        if not exists (
+            select 1 from pg_constraint
+            where conrelid = 'public.vacancies'::regclass
+              and conname = 'vacancies_institution_id_fkey'
+        ) then
+            alter table public.vacancies
+                add constraint vacancies_institution_id_fkey
+                foreign key (institution_id) references public.profiles(id) on delete cascade;
+        end if;
+    end if;
+
+    if to_regclass('public.applications') is not null then
+        if not exists (
+            select 1 from pg_constraint
+            where conrelid = 'public.applications'::regclass
+              and conname = 'applications_vacancy_id_fkey'
+        ) then
+            alter table public.applications
+                add constraint applications_vacancy_id_fkey
+                foreign key (vacancy_id) references public.vacancies(id) on delete cascade;
+        end if;
+        if not exists (
+            select 1 from pg_constraint
+            where conrelid = 'public.applications'::regclass
+              and conname = 'applications_applicant_id_fkey'
+        ) then
+            alter table public.applications
+                add constraint applications_applicant_id_fkey
+                foreign key (applicant_id) references public.profiles(id) on delete cascade;
+        end if;
+    end if;
+
+    if to_regclass('public.connections') is not null then
+        if not exists (
+            select 1 from pg_constraint
+            where conrelid = 'public.connections'::regclass
+              and conname = 'connections_teacher_id_fkey'
+        ) then
+            alter table public.connections
+                add constraint connections_teacher_id_fkey
+                foreign key (teacher_id) references public.profiles(id) on delete cascade;
+        end if;
+        if not exists (
+            select 1 from pg_constraint
+            where conrelid = 'public.connections'::regclass
+              and conname = 'connections_institution_id_fkey'
+        ) then
+            alter table public.connections
+                add constraint connections_institution_id_fkey
+                foreign key (institution_id) references public.profiles(id) on delete cascade;
+        end if;
+        if not exists (
+            select 1 from pg_constraint
+            where conrelid = 'public.connections'::regclass
+              and conname = 'connections_requested_by_fkey'
+        ) then
+            alter table public.connections
+                add constraint connections_requested_by_fkey
+                foreign key (requested_by) references public.profiles(id) on delete cascade;
+        end if;
+    end if;
+
+    if to_regclass('public.complaints') is not null
+       and not exists (
+            select 1 from pg_constraint
+            where conrelid = 'public.complaints'::regclass
+              and conname = 'complaints_reporter_id_fkey'
+       ) then
+        alter table public.complaints
+            add constraint complaints_reporter_id_fkey
+            foreign key (reporter_id) references public.profiles(id) on delete cascade;
+    end if;
+
+    if to_regclass('public.audit_log') is not null
+       and not exists (
+            select 1 from pg_constraint
+            where conrelid = 'public.audit_log'::regclass
+              and conname = 'audit_log_actor_id_fkey'
+       ) then
+        alter table public.audit_log
+            add constraint audit_log_actor_id_fkey
+            foreign key (actor_id) references public.profiles(id);
+    end if;
+
+    if to_regclass('public.notifications') is not null then
+        if not exists (
+            select 1 from pg_constraint
+            where conrelid = 'public.notifications'::regclass
+              and conname = 'notifications_recipient_id_fkey'
+        ) then
+            alter table public.notifications
+                add constraint notifications_recipient_id_fkey
+                foreign key (recipient_id) references public.profiles(id) on delete cascade;
+        end if;
+        if not exists (
+            select 1 from pg_constraint
+            where conrelid = 'public.notifications'::regclass
+              and conname = 'notifications_sender_id_fkey'
+        ) then
+            alter table public.notifications
+                add constraint notifications_sender_id_fkey
+                foreign key (sender_id) references public.profiles(id);
+        end if;
+    end if;
+
+    if to_regclass('public.saved_vacancies') is not null then
+        if not exists (
+            select 1 from pg_constraint
+            where conrelid = 'public.saved_vacancies'::regclass
+              and conname = 'saved_vacancies_job_seeker_id_fkey'
+        ) then
+            alter table public.saved_vacancies
+                add constraint saved_vacancies_job_seeker_id_fkey
+                foreign key (job_seeker_id) references public.profiles(id) on delete cascade;
+        end if;
+        if not exists (
+            select 1 from pg_constraint
+            where conrelid = 'public.saved_vacancies'::regclass
+              and conname = 'saved_vacancies_vacancy_id_fkey'
+        ) then
+            alter table public.saved_vacancies
+                add constraint saved_vacancies_vacancy_id_fkey
+                foreign key (vacancy_id) references public.vacancies(id) on delete cascade;
+        end if;
+    end if;
+
+    if to_regclass('public.saved_teachers') is not null then
+        if not exists (
+            select 1 from pg_constraint
+            where conrelid = 'public.saved_teachers'::regclass
+              and conname = 'saved_teachers_institution_id_fkey'
+        ) then
+            alter table public.saved_teachers
+                add constraint saved_teachers_institution_id_fkey
+                foreign key (institution_id) references public.profiles(id) on delete cascade;
+        end if;
+        if not exists (
+            select 1 from pg_constraint
+            where conrelid = 'public.saved_teachers'::regclass
+              and conname = 'saved_teachers_job_seeker_id_fkey'
+        ) then
+            alter table public.saved_teachers
+                add constraint saved_teachers_job_seeker_id_fkey
+                foreign key (job_seeker_id) references public.profiles(id) on delete cascade;
+        end if;
+    end if;
+end;
+$$;
+
 notify pgrst, 'reload schema';
