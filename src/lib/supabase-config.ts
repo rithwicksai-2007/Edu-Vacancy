@@ -169,7 +169,7 @@ export function getSupabaseClient() {
 
   if (!supabaseUrl || !supabaseAnonKey) {
     throw new Error(
-      "Supabase is not configured. Set VITE_SUPABASE_URL and VITE_SUPABASE_ANON_KEY in your .env file.",
+      "Supabase is not configured. Set VITE_SUPABASE_URL and VITE_SUPABASE_ANON_KEY in .env before building, or add them as GitHub Actions secrets for GitHub Pages.",
     );
   }
 

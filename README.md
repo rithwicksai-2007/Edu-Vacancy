@@ -66,14 +66,18 @@ a Render Blueprint in [`render.yaml`](./render.yaml).
 2. After Render deploys, open the service's `/health` URL and confirm it returns
    `{"status":"ok"}`. Copy the service's base URL (for example,
    `https://your-service.onrender.com`).
-3. Set `VITE_API_BASE_URL` in the project-root `.env` to that base URL, then
-   rebuild and publish the frontend:
+3. In the GitHub repository, open **Settings → Secrets and variables →
+   Actions** and add `VITE_SUPABASE_URL` and `VITE_SUPABASE_ANON_KEY` as
+   repository secrets. Use the same Supabase project as the backend and its
+   browser anon/publishable key; never use the service-role key. If the API
+   URL differs from `https://edu-vacancy-backend.onrender.com`, add
+   `VITE_API_BASE_URL` as an Actions variable.
+4. Push changes to `main`. The **Deploy GitHub Pages** workflow builds the
+   frontend and deploys it automatically. It stops with a clear error if either
+   Supabase secret is missing, rather than deploying a frontend that cannot
+   sign in.
 
-   ```powershell
-   npm.cmd run deploy
-   ```
-
-4. Open the GitHub Pages project URL
+5. Open the GitHub Pages project URL
    `https://rithwicksai-2007.github.io/Edu-Vacancy/`. The bare domain
    `https://rithwicksai-2007.github.io/` is a separate user-site address and
    does not host this project.
